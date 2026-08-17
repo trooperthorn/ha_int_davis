@@ -1,0 +1,6 @@
+{
+    "name": "RS232 - Davis Vantage",
+    "homeassistant": "2026.5.0",
+    "render_readme": true,
+    "iot_class": "Local Polling"
+  }

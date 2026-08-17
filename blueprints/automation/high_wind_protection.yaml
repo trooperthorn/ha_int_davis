@@ -1,0 +1,21 @@
+alias: "Weather Emergency: Damaging Wind Gust Protection"
+description: "Triggers on high wind gusts to protect outdoor structures and notify occupants."
+mode: single
+trigger:
+  - platform: numeric_state
+    entity_id: sensor.davis_vantage_wind_gust
+    above: 40
+condition: []
+action:
+  - action: notify.notify
+    data:
+      title: "💨 High Wind Alert"
+      message: >
+        Extreme wind gust detected: {{ states('sensor.davis_vantage_wind_gust') }} mph 
+        from {{ states('sensor.davis_vantage_wind_direction_rose') }}.
+      data:
+        priority: high
+  # Optional hardware automation
+  # - action: cover.close_cover
+  #   target:
+  #     entity_id: cover.patio_awning

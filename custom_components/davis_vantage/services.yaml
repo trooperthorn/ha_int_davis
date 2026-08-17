@@ -1,0 +1,37 @@
+set_davis_time:
+get_davis_time:
+get_raw_data:
+get_info:
+set_yearly_rain:
+  fields:
+    rain_clicks:
+      required: true
+      example: 500
+      selector:
+        number:
+set_archive_period:
+  fields:
+    archive_period:
+      required: true
+      example: 10
+      selector:
+        select:
+          options:
+            - "1"
+            - "5"
+            - "10"
+            - "15"
+            - "30"
+            - "60"
+            - "120"
+set_rain_collector:
+  fields:
+    rain_collector:
+      required: true
+      example: "0.2 mm"
+      selector:
+        select:
+          options:
+            - "0.01\""
+            - "0.2 mm"
+            - "0.1 mm"

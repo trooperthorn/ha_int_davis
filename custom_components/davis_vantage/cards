@@ -1,0 +1,166 @@
+type: vertical-stack
+cards:
+  - type: horizontal-stack
+    cards:
+      - type: custom:windrose-card
+        data_period:
+          period_back: "-1d"
+        refresh_interval: 900
+        windspeed_bar_location: bottom
+        wind_direction_entity:
+          entity: sensor.davis_vantage_wind_direction
+          use_statistics: false
+          direction_compensation: 0
+          direction_letters: NESWX
+        windspeed_entities:
+          - entity: sensor.davis_vantage_wind_speed
+            name: Station Windspeed
+            speed_unit: mph
+            use_statistics: false
+            windspeed_bar_full: true
+            output_speed_unit: mph
+            speed_range_beaufort: true
+          - entity: sensor.davis_vantage_wind_gust_10_min
+            name: Average Gust Speed
+            speed_unit: mph
+            use_statistics: false
+            windspeed_bar_full: false
+            output_speed_unit: mph
+            speed_range_beaufort: false
+            speed_ranges: null
+        direction_labels:
+          cardinal_direction_letters: NESW
+          show_cardinal_directions: true
+          show_intercardinal_directions: true
+          show_secondary_intercardinal_directions: true
+          cardinal_directions_text_size: 0
+          intercardinal_directions_text_size: 0
+          secondary_intercardinal_directions_text_size: 0
+        rose_config:
+          windrose_draw_north_offset: 150
+        current_direction:
+          show_arrow: true
+          arrow_size: 100
+          center_circle_size: 30
+        compass_direction:
+          auto_rotate: false
+          entity: sensor.davis_vantage_wind_direction
+        colors:
+          rose_lines: rgb(255,255,255)
+          rose_cardinal_direction_labels: white
+          rose_intercardinal_direction_labels: orange
+          rose_secondary_intercardinal_direction_labels: yellow
+          rose_center_percentage: white
+          rose_percentages: white
+          rose_current_direction_arrow: red
+          bar_border: hsl(200, 100%, 60%)
+          bar_unit_name: white
+          bar_name: white
+          bar_unit_values: white
+          bar_percentages: auto
+        card_mod:
+          style: |
+            circle + text { /* central value */
+              font-size: 500%;
+            }
+            g > text { /* other values */
+              font-size: 400%;
+            }
+            rect + text { /* scale */
+              font-size: 400%;
+            }
+            svg { /* may be needed if a font-size for a scale too large */
+              overflow: visible;
+            }
+      - type: custom:mini-graph-card
+        entities:
+          - entity: sensor.davis_vantage_wind_speed
+            state_adaptive_color: true
+        line_width: 1
+        name: Wind Speed
+        hour24: true
+        points_per_hour: 10
+        hours_to_show: 24
+        aggregate_func: max
+        show:
+          extrema: true
+        color_thresholds:
+          - color: "#ffc000"
+            value: 16
+          - color: "#fee231"
+            value: 8
+          - color: "#55b04f"
+            value: 2.5
+          - color: "#189af2"
+            value: 0
+  - type: horizontal-stack
+    cards:
+      - type: custom:mini-graph-card
+        entities:
+          - entity: sensor.davis_vantage_rain_today
+            state_adaptive_color: true
+        line_width: 1
+        name: Weeks Rain
+        icon: mdi:weather-pouring
+        hour24: false
+        points_per_hour: 1
+        aggregate_func: max
+        hours_to_show: 168
+        show:
+          extrema: true
+        color_thresholds:
+          - color: "#292929"
+            value: 5
+          - color: "#6f6f6f"
+            value: 4.5
+          - color: "#afafaf"
+            value: 4
+          - color: "#f8f8f8"
+            value: 3.5
+          - color: "#861586"
+            value: 3
+          - color: "#b00000"
+            value: 2.5
+          - color: "#ff4100"
+            value: 2
+          - color: "#f99c00"
+            value: 1.5
+          - color: "#ffff00"
+            value: 1
+          - color: "#008d00"
+            value: 0.75
+          - color: "#30ff30"
+            value: 0.5
+          - color: "#0000ef"
+            value: 0.25
+          - color: "#00c9ff"
+            value: 0
+      - type: custom:mini-graph-card
+        color_thresholds:
+          - color: "#8a60a3"
+            value: 11
+          - color: "#e44b19"
+            value: 8
+          - color: "#ec7e0e"
+            value: 6
+          - color: "#f4bb00"
+            value: 3
+          - color: "#109e48"
+            value: 0
+        entities:
+          - entity: sensor.davis_vantage_outside_temperature
+            name: Outside Temp
+            state_adaptive_color: false
+          - color: gray
+            entity: sensor.davis_vantage_outside_temperature
+            name: Day
+            show_legend: false
+            show_line: false
+            show_points: false
+            y_axis: secondary
+        hours_to_show: 168
+        line_width: 1
+        points_per_hour: 5
+        hour24: true
+        show:
+          extrema: true

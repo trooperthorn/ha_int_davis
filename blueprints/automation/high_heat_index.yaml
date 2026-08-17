@@ -1,0 +1,16 @@
+alias: "Weather Emergency: Extreme Heat Index Alert"
+description: "Alerts when the heat index reaches hazardous levels."
+mode: single
+trigger:
+  - platform: numeric_state
+    entity_id: sensor.davis_vantage_heat_index
+    above: 105
+condition: []
+action:
+  - action: notify.notify
+    data:
+      title: "☀️ Excessive Heat Warning"
+      message: >
+        Extreme Heat Index: {{ states('sensor.davis_vantage_heat_index') }}°F 
+        (Actual Temp: {{ states('sensor.davis_vantage_temperature') }}°F, Humidity: {{ states('sensor.davis_vantage_humidity') }}%). 
+        Bring pets indoors and limit outdoor exertion.

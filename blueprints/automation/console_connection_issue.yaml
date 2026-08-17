@@ -1,0 +1,18 @@
+alias: "Weather Station: ISS Reception Alert"
+description: "Warns if station wireless packets are dropping during heavy weather."
+mode: single
+trigger:
+  - platform: numeric_state
+    entity_id: sensor.davis_vantage_rx_percentage
+    below: 75
+    for:
+      minutes: 10
+condition:
+  - condition: state
+    entity_id: binary_sensor.davis_vantage_transmitter_battery
+    state: "problem"
+action:
+  - action: notify.notify
+    data:
+      title: "📡 Davis ISS Signal Loss"
+      message: "Wireless reception from outdoor ISS has dropped below 75%. Check transmitter battery or solar capacitor."
