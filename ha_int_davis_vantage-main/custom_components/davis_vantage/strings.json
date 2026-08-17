@@ -1,0 +1,126 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Davis Vantage Connection",
+        "description": "Select how Home Assistant connects to your Davis Vantage console or WeatherLink logger.",
+        "data": {
+          "connection_type": "Connection Type"
+        }
+      },
+      "serial": {
+        "title": "Serial / USB Configuration",
+        "description": "Select the serial port connected to your Davis WeatherLink data logger.",
+        "data": {
+          "port": "Serial Port",
+          "baudrate": "Baud Rate"
+        }
+      },
+      "network": {
+        "title": "Network Configuration",
+        "description": "Enter the IP address and port for your WeatherLinkIP or network logger.",
+        "data": {
+          "host": "Host / IP Address",
+          "port": "Port"
+        }
+      },
+      "setup_other_info": {
+        "title": "Advanced Settings",
+        "description": "Configure polling behavior and protocol settings.",
+        "data": {
+          "use_loop2": "Enable LOOP2 Protocol",
+          "interval": "Polling Interval (seconds)"
+        },
+        "data_description": {
+          "use_loop2": "Requests expanded LOOP2 data packets (LPS 2 1). Requires Vantage Pro2 or Vantage Vue console firmware v1.90 or newer. Leave disabled if you have older firmware or experience communication timeouts.",
+          "interval": "Time between console read cycles. Default is 300 seconds (5 min). Serial connections should not be polled faster than every 10–15 seconds to prevent bus contention."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the weather station. Please verify the port or network address.",
+      "no_davis_device": "No Davis console responded. Check serial cable seating and verify the console is powered.",
+      "unsupported_loop2": "The console rejected the LOOP2 command (LPS 2 1). Verify your firmware is version 1.90+ or disable LOOP2.",
+      "timeout": "Console took too long to wake up or send an ACK byte."
+    },
+    "abort": {
+      "already_configured": "This Davis Vantage device is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Davis Vantage Options",
+        "description": "Update station polling interval and protocol settings.",
+        "data": {
+          "use_loop2": "Enable LOOP2 Protocol",
+          "interval": "Polling Interval (seconds)"
+        },
+        "data_description": {
+          "use_loop2": "Requires firmware v1.90+. Leave disabled if your console does not support LOOP2.",
+          "interval": "Polling frequency in seconds. Standard range is 30 to 300 seconds."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "outside_temperature": { "name": "Outside Temperature" },
+      "inside_temperature": { "name": "Inside Temperature" },
+      "dew_point": { "name": "Dew Point" },
+      "heat_index": { "name": "Heat Index" },
+      "wind_chill": { "name": "Wind Chill" },
+      "barometric_pressure": { "name": "Barometric Pressure" },
+      "barometric_trend": { "name": "Barometric Trend" },
+      "rain_rate": { "name": "Rain Rate" },
+      "rain_day": { "name": "Rain Today" },
+      "rain_storm": { "name": "Rain Storm Accumulation" },
+      "rain_15_min": { "name": "Rain (15 Min)" },
+      "wind_speed": { "name": "Wind Speed" },
+      "wind_gust": { "name": "Wind Gust" },
+      "wind_direction": { "name": "Wind Direction" },
+      "wind_direction_rose": { "name": "Wind Direction (Rose)" },
+      "solar_radiation": { "name": "Solar Radiation" },
+      "uv_index": { "name": "UV Index" },
+      "forecast_rule": { "name": "Forecast Rule" },
+      "forecast_icon": {
+        "name": "Current Condition",
+        "state": {
+          "sunny": "Sunny",
+          "partlycloudy": "Partly Cloudy",
+          "cloudy": "Cloudy",
+          "rainy": "Rainy",
+          "snowy": "Snowy",
+          "snowy-rainy": "Snowy Rainy"
+        }
+      },
+      "console_battery": { "name": "Console Battery Voltage" },
+      "rx_percentage": { "name": "ISS Signal Reception Quality" },
+      "archive_interval": { "name": "Archive Interval" }
+    },
+    "binary_sensor": {
+      "is_raining": { "name": "Raining" },
+      "tx_battery_status": { "name": "Transmitter Battery Low" },
+      "flash_flood_alarm": { "name": "Flash Flood Alarm" },
+      "storm_rain_alarm": { "name": "Storm Rain Alarm" },
+      "thsw_alarm": { "name": "High THSW Index Alarm" },
+      "iss_connection": { "name": "Outdoor Sensor Suite Status" }
+    }
+  },
+  "services": {
+    "set_console_lamps": {
+      "name": "Set Console Lamps",
+      "description": "Turns the physical LCD backlight on the Davis console on or off.",
+      "fields": {
+        "state": {
+          "name": "State",
+          "description": "True to illuminate the backlight, False to turn it off."
+        }
+      }
+    },
+    "clear_alarms": {
+      "name": "Clear Active Alarms",
+      "description": "Silences sounding alarms and resets active hardware alarm bits on the console."
+    }
+  }
+}

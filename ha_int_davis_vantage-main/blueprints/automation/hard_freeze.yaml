@@ -1,0 +1,15 @@
+alias: "Weather Emergency: Freeze Warning"
+description: "Notifies when temperatures drop below freezing."
+mode: single
+trigger:
+  - platform: numeric_state
+    entity_id: sensor.davis_vantage_temperature
+    below: 32
+condition: []
+action:
+  - action: notify.notify
+    data:
+      title: "❄️ Freezing Temperature Alert"
+      message: >
+        Outdoor temperature has dropped to {{ states('sensor.davis_vantage_temperature') }}°F 
+        (Wind Chill: {{ states('sensor.davis_vantage_wind_chill') }}°F). Protect exposed pipes and plants.

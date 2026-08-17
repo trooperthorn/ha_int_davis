@@ -1,0 +1,19 @@
+alias: "Weather Emergency: Rapid Barometric Drop Alert"
+description: "Alerts when barometric pressure drops rapidly, indicating an incoming severe storm front."
+mode: single
+trigger:
+  - platform: state
+    entity_id: sensor.davis_vantage_barometric_trend
+    to: "Falling Rapidly"
+condition: []
+action:
+  - action: notify.notify
+    data:
+      title: "⚠️ Severe Weather Inbound"
+      message: >
+        Barometric pressure is falling rapidly (Current: {{ states('sensor.davis_vantage_barometric_pressure') }} inHg). 
+        A strong storm front or high-wind boundary is approaching.
+      data:
+        push:
+          sound: "critical"
+        priority: high

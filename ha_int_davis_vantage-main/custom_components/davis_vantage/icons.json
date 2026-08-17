@@ -1,0 +1,59 @@
+{
+  "services": {
+    "set_davis_time": "mdi:clock-edit-outline",
+    "get_davis_time": "mdi:clock-outline",
+    "get_raw_data": "mdi:export",
+    "get_info": "mdi:information-box-outline",
+    "set_yearly_rain": "mdi:weather-pouring",
+    "set_archive_period": "mdi:archive-clock-outline",
+    "set_rain_collector": "mdi:bucket-outline"
+  },
+  "entity": {
+    "sensor": {
+      "barometric_trend": {
+        "default": "mdi:trending-neutral",
+        "state": {
+          "falling_rapidly": "mdi:trending-down",
+          "falling_slowly": "mdi:trending-down",
+          "steady": "mdi:trending-neutral",
+          "rising_slowly": "mdi:trending-up",
+          "rising_rapidly": "mdi:trending-up"
+        }
+      },
+      "wind_direction_rose": {
+        "default": "mdi:compass-outline",
+        "state": {
+          "n": "mdi:arrow-down-bold-outline",
+          "ne": "mdi:arrow-bottom-left-bold-outline",
+          "e": "mdi:arrow-left-bold-outline",
+          "se": "mdi:arrow-top-left-bold-outline",
+          "s": "mdi:arrow-up-bold-outline",
+          "sw": "mdi:arrow-top-right-bold-outline",
+          "w": "mdi:arrow-right-bold-outline",
+          "nw": "mdi:arrow-bottom-right-bold-outline"
+        }
+      },
+      "wind_direction_rose_average": {
+        "default": "mdi:compass-outline",
+        "state": {
+          "n": "mdi:arrow-down-bold-outline",
+          "ne": "mdi:arrow-bottom-left-bold-outline",
+          "e": "mdi:arrow-left-bold-outline",
+          "se": "mdi:arrow-top-left-bold-outline",
+          "s": "mdi:arrow-up-bold-outline",
+          "sw": "mdi:arrow-top-right-bold-outline",
+          "w": "mdi:arrow-right-bold-outline",
+          "nw": "mdi:arrow-bottom-right-bold-outline"
+        }
+      }
+    },
+    "binary_sensor": {
+      "is_raining": {
+        "state": {
+          "on": "mdi:weather-pouring",
+          "off": "mdi:weather-partly-cloudy"
+        }
+      }
+    }
+  }
+}

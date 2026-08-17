@@ -1,0 +1,16 @@
+alias: "Weather Emergency: Console Backlight Alert"
+description: "Turns on the physical Davis console backlight when a rapid pressure drop is detected."
+mode: single
+trigger:
+  - platform: state
+    entity_id: sensor.davis_vantage_barometric_trend
+    to: "Falling Rapidly"
+action:
+  # Turn on the console backlight
+  - action: davis_vantage.set_console_lamps
+    data:
+      state: true
+  - action: notify.notify
+    data:
+      title: "⚠️ Squall Line / Storm Warning"
+      message: "Rapid pressure drop detected. Davis console backlight activated."
