@@ -1,4 +1,10 @@
 {
+  "issues": {
+    "connection_lost": {
+      "title": "Davis Vantage station unreachable",
+      "description": "{name} has failed to respond for several polling cycles in a row. This usually means the console is powered off, the serial cable is disconnected, or - if this is a USB connection - the device was reassigned to a different port after a reboot.\n\nCheck the physical connection, then use **Settings > Devices & services > {name} > Reconfigure** to verify or update the port/link."
+    }
+  },
   "config": {
     "step": {
       "user": {
@@ -121,6 +127,48 @@
     "clear_alarms": {
       "name": "Clear Active Alarms",
       "description": "Silences sounding alarms and resets active hardware alarm bits on the console."
+    },
+    "set_barometer_calibration": {
+      "name": "Set Barometer Calibration",
+      "description": "Sets the station elevation and, optionally, a known-good local barometer reading to fine-tune the console's adjusted-pressure calculation.",
+      "fields": {
+        "elevation": {
+          "name": "Elevation",
+          "description": "Station elevation in feet (-2000 to 15000). This is the primary correction."
+        },
+        "barometer": {
+          "name": "Barometer reading",
+          "description": "A current barometer reading from a reliable nearby reference (20.000-32.500 inHg). Leave at 0 to clear any existing offset - do not use this alone to correct for sea level."
+        }
+      }
+    },
+    "get_eeprom": {
+      "name": "Read EEPROM",
+      "description": "Reads raw bytes from the console's EEPROM at a given address. See the Davis Serial Communication Reference Manual's EEPROM address table for what each address holds.",
+      "fields": {
+        "address": {
+          "name": "Address",
+          "description": "EEPROM address in hex, e.g. \"2B\" for SETUP_BITS."
+        },
+        "size": {
+          "name": "Size",
+          "description": "Number of bytes to read."
+        }
+      }
+    },
+    "set_eeprom": {
+      "name": "Write EEPROM",
+      "description": "Advanced/expert use only. Writes raw bytes to the console's EEPROM at a given address. Some addresses are factory calibration values that should never be written - check the manual's EEPROM address table before using this. There is no hardware protection against writing the wrong bytes to the wrong address.",
+      "fields": {
+        "address": {
+          "name": "Address",
+          "description": "EEPROM address in hex, e.g. \"2B\" for SETUP_BITS."
+        },
+        "data": {
+          "name": "Data",
+          "description": "Bytes to write, as a hex string (e.g. \"13\" for one byte, \"0102\" for two)."
+        }
+      }
     }
   }
 }

@@ -1,0 +1,38 @@
+alias: "Weather: Possible Solar Panel / Sensor Issue"
+description: >
+  Flags when the sun is well up in a clear sky but the Davis solar
+  radiation sensor reads unexpectedly low - useful as an early sign of
+  dirty/shaded/failed solar panels, or the station's own solar sensor
+  needing cleaning. Requires the optional Davis solar radiation sensor
+  (sensor.davis_vantage_solar_radiation) and HA's built-in sun integration
+  (sun.sun, enabled by default). Compares to sky condition rather than a
+  flat number so cloudy days don't trigger it.
+mode: single
+trigger:
+  - platform: numeric_state
+    entity_id: sensor.davis_vantage_solar_radiation
+    below: 150
+    for:
+      minutes: 30
+condition:
+  # Sun well above the horizon (not dawn/dusk, where low radiation is normal).
+  - condition: numeric_state
+    entity_id: sun.sun
+    attribute: elevation
+    above: 40
+  # Only alert if the sky itself looks clear/sunny - otherwise low solar
+  # radiation is just weather, not a panel problem.
+  - condition: state
+    entity_id: weather.davis_vantage_vantage_weather_station
+    state:
+      - sunny
+      - partlycloudy
+action:
+  - action: notify.notify
+    data:
+      title: "☀️ Low Solar Radiation on a Clear Day"
+      message: >
+        Sun elevation is {{ state_attr('sun.sun', 'elevation') | round(0) }}°
+        but solar radiation is only {{ states('sensor.davis_vantage_solar_radiation') }}
+        W/m². Worth checking the station's solar sensor - or your panels - for
+        shading, dirt, or a fault.

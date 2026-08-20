@@ -1,5 +1,8 @@
 alias: "Weather Emergency: 15-Minute Flash Flood Warning"
-description: "Detects rapid short-term precipitation exceeding drainage thresholds."
+description: >
+  Detects rapid short-term precipitation exceeding drainage thresholds.
+  Requires LOOP2 mode enabled (Rain (15 Min) is a LOOP2-only sensor,
+  disabled by default - enable it in the entity's settings first).
 mode: single
 trigger:
   - platform: numeric_state

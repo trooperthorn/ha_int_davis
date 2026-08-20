@@ -130,7 +130,7 @@ class LoopData2Parser(LoopDataParserRevB):
 class DavisVantageClient:
     """Davis Vantage Client class"""
 
-    _vantagepro2 = None  # type: ignore
+    _vantagepro2: VantagePro2 | None = None
     _latitude: float = 0.0
     _longitude: float = 0.0
     _elevation: int = 0
@@ -181,7 +181,7 @@ class DavisVantageClient:
 
         return self._vantagepro2.link
 
-    def get_vantagepro2fromurl(self, url: str):
+    def get_vantagepro2fromurl(self, url: str) -> VantagePro2:
         try:
             vp = VantagePro2.from_url(url)
             if not self._persistent_connection:
@@ -264,18 +264,23 @@ class DavisVantageClient:
         except Exception as e:
             _LOGGER.error("Couldn't get hilows: %s", e)
             
-        try:
-            end_datetime = datetime.now()
-            start_datetime = end_datetime - timedelta(
-                minutes=self._vantagepro2.archive_period * 2 
-            )
-            _LOGGER.debug("Start get_archives")
-            archives = self._vantagepro2.get_archives(start_datetime, end_datetime)  
-            _LOGGER.debug("End get_archives")
-        except Exception as e:
-            _LOGGER.debug("Skipping archive sync (non-fatal serial/encoding hiccup): %s", e)
-            archives = None
-            
+        # LOOP2 already carries a rolling 10-min wind gust + average natively
+        # (see add_loop2_wind_info), so the archive fetch below - otherwise
+        # needed purely to derive gust/average wind from DMPAFT - would just
+        # be a redundant round trip. Skip it in LOOP2 mode.
+        if not self._use_loop2:
+            try:
+                end_datetime = datetime.now()
+                start_datetime = end_datetime - timedelta(
+                    minutes=self._vantagepro2.archive_period * 2
+                )
+                _LOGGER.debug("Start get_archives")
+                archives = self._vantagepro2.get_archives(start_datetime, end_datetime)
+                _LOGGER.debug("End get_archives")
+            except Exception as e:
+                _LOGGER.debug("Skipping archive sync (non-fatal serial/encoding hiccup): %s", e)
+                archives = None
+
         # The rain collector type rarely changes and reading it costs an extra
         # wake-up + serial round trip. Fetch it once and reuse the cached value
         # on subsequent polls to keep per-poll latency down.
@@ -300,6 +305,7 @@ class DavisVantageClient:
         (mirroring VantagePro2.get_current_data()'s own wake_up/send/read
         pattern) and parses the response with LoopData2Parser.
         """
+        assert self._vantagepro2 is not None  # only called from get_current_data(), after it connects
         self._vantagepro2.wake_up()
         self._vantagepro2.send("LPS 2 1", self._vantagepro2.ACK)
         raw_data = self._vantagepro2.link.read(99, binary=True)
@@ -326,6 +332,8 @@ class DavisVantageClient:
                 
                 if archives:
                     self.add_archive_info(archives, new_data)
+                elif self._use_loop2:
+                    self.add_loop2_wind_info(new_data)
                 if hilows:
                     new_raw_hilows = self.__get_full_raw_data_hilows(hilows)
                     self._last_raw_hilows = new_raw_hilows
@@ -414,19 +422,98 @@ class DavisVantageClient:
     async def async_get_rxcheck(self):
         """Retrieve detailed connectivity diagnostics."""
         return await self._async_send_console_command("RXCHECK\n")
+
+    async def async_get_nver(self) -> str:
+        """Get the firmware version string (Vantage Pro2/Vue only)."""
+        return await self._async_send_console_command("NVER\n")
+
+    async def async_get_bardata(self) -> str:
+        """Get the current barometer calibration parameters as text."""
+        return await self._async_send_console_command("BARDATA\n")
+
+    async def async_set_barometer_calibration(
+        self, elevation_ft: int, bar_inhg: float = 0.0
+    ) -> str:
+        """Set the barometer/elevation offset (BAR= command, manual sec. VIII.5).
+
+        `bar_inhg`: a known-good local barometer reading (20.000-32.500 inHg)
+        to fine-tune the console's own adjusted-pressure calculation, or 0 to
+        clear any existing offset. `elevation_ft`: station elevation
+        (-2000 to 15000 ft) - the primary correction, always required.
+        """
+        bar_value = 0 if bar_inhg == 0 else round(bar_inhg * 1000)
+        cmd = f"BAR={bar_value} {elevation_ft}\n"
+        return await self._async_send_console_command(cmd)
+
+    def get_eeprom(self, address_hex: str, size: int) -> bytes:
+        """Read `size` bytes from EEPROM starting at `address_hex` (manual sec. XIII)."""
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        self._vantagepro2.link.open()
+        try:
+            self._vantagepro2.wake_up()
+            return self._vantagepro2.read_from_eeprom(address_hex, size)
+        finally:
+            if not self._persistent_connection:
+                self._vantagepro2.link.close()
+
+    async def async_get_eeprom(self, address_hex: str, size: int) -> str:
+        """Read EEPROM bytes and return them as a hex string."""
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, self.get_eeprom, address_hex, size)
+        return data.hex()
+
+    def set_eeprom(self, address_hex: str, data: bytes) -> None:
+        """Write `data` to EEPROM starting at `address_hex` (manual sec. XIII).
+
+        Advanced/expert use only: several EEPROM locations are factory
+        calibration values that should never be written (see the manual's
+        EEPROM address table), and writing the wrong bytes to the wrong
+        address can corrupt console settings. There is no hardware
+        protection against this - the console will accept whatever is sent.
+        """
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        self._vantagepro2.link.open()
+        try:
+            self._vantagepro2.wake_up()
+            self._vantagepro2.write_to_eeprom(address_hex, len(data), data)
+        finally:
+            if not self._persistent_connection:
+                self._vantagepro2.link.close()
+
+    async def async_set_eeprom(self, address_hex: str, data_hex: str) -> None:
+        """Write a hex string of bytes to EEPROM starting at `address_hex`."""
+        data = bytes.fromhex(data_hex)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.set_eeprom, address_hex, data)
     # -----------------------------
 
     def add_additional_info(self, data: dict[str, Any]) -> None:
+        assert self._vantagepro2 is not None  # only called from async_get_current_data(), after get_current_data() connects
+        # LOOP2 packets already carry console-computed DewPoint, HeatIndex,
+        # and WindChill (LoopData2Parser) - prefer those over the client-side
+        # formulas below rather than clobbering real values with estimates.
+        # LOOP1 has none of these, so they're always None going in and the
+        # formulas fill them in as before.
         if data.get("TempOut") is not None:
             if data.get("HumOut") is not None:
-                data["HeatIndex"] = calc_heat_index(data["TempOut"], data["HumOut"])
-                data["DewPoint"] = calc_dew_point(data["TempOut"], data["HumOut"])
+                if data.get("HeatIndex") is None:
+                    data["HeatIndex"] = calc_heat_index(data["TempOut"], data["HumOut"])
+                if data.get("DewPoint") is None:
+                    data["DewPoint"] = calc_dew_point(data["TempOut"], data["HumOut"])
             if data.get("WindSpeed") is not None:
-                data["WindChill"] = calc_wind_chill(data["TempOut"], data["WindSpeed"])
+                if data.get("WindChill") is None:
+                    data["WindChill"] = calc_wind_chill(data["TempOut"], data["WindSpeed"])
                 if data.get("HumOut") is not None:
-                    data["FeelsLike"] = calc_feels_like(
-                        data["TempOut"], data["HumOut"], data["WindSpeed"]
-                    )
+                    # THSW (Temp-Humidity-Sun-Wind) is Davis's own "feels
+                    # like" figure and is strictly better than the generic
+                    # calc_feels_like() estimate when LOOP2 provides it.
+                    data["FeelsLike"] = data.get("THSWIndex")
+                    if data["FeelsLike"] is None:
+                        data["FeelsLike"] = calc_feels_like(
+                            data["TempOut"], data["HumOut"], data["WindSpeed"]
+                        )
                     
         # --- ROBUST WIND DIRECTION & ROSE SYNC FIX ---
         wind_dir = data.get("WindDir")
@@ -550,6 +637,31 @@ class DavisVantageClient:
                 convert_to_kmh(data["WindSpeedAvg"])
             )
 
+    def add_loop2_wind_info(self, data: dict[str, Any]):
+        """Populate gust/average wind fields directly from a LOOP2 packet.
+
+        LOOP2 already carries a rolling 10-minute wind gust and average
+        (see LoopData2Parser), which is what add_archive_info() otherwise
+        derives from a DMPAFT archive fetch - so this replaces that round
+        trip in LOOP2 mode instead of duplicating it.
+        """
+        wind_gust = data.get("WindGust10Min")
+        wind_avg = data.get("WindSpeed10Min")
+        wind_gust_dir = data.get("WindGustDir10Min")
+
+        if wind_gust is not None:
+            data["WindGust"] = wind_gust
+        if wind_avg is not None:
+            data["WindSpeedAvg"] = wind_avg
+            data["WindSpeedBft"] = convert_kmh_to_bft(convert_to_kmh(wind_avg))
+        # LOOP2 has no true 10-minute *average* direction field, only the
+        # direction of the 10-minute gust - expose it under its own name
+        # rather than mislabeling it as "WindAvgDir".
+        if wind_gust_dir not in (None, 0, 32767):
+            data["WindGustDir"] = wind_gust_dir
+            rose = get_wind_rose(wind_gust_dir)
+            data["WindGustDirRose"] = rose.lower() if isinstance(rose, str) else "n"
+
     def add_hilows_info(self, hilows, data: dict[str, Any]):
         if not hilows:
             return
@@ -612,9 +724,11 @@ class DavisVantageClient:
             0x10: RAIN_COLLECTOR_METRIC,
             0x20: RAIN_COLLECTOR_METRIC_0_1,
         }
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         self._vantagepro2.wake_up()
-        rain_collector = self._vantagepro2.get_rain_collector() 
-        return rain_collector_map.get(rain_collector, "") 
+        rain_collector = self._vantagepro2.get_rain_collector()
+        return rain_collector_map.get(rain_collector, "")
 
     async def async_get_rain_collector(self) -> str:
         info = ""
@@ -631,6 +745,8 @@ class DavisVantageClient:
             RAIN_COLLECTOR_METRIC: 0x10,
             RAIN_COLLECTOR_METRIC_0_1: 0x20,
         }
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         self._vantagepro2.set_rain_collector(
             rain_collector_map.get(rain_collector, 0x00)
         )
@@ -646,7 +762,9 @@ class DavisVantageClient:
 
     def get_latitude_longitude_elevation(self) -> tuple[float, float, int]:
         latitude = longitude = None
-        data = self._vantagepro2.read_from_eeprom("0B", 6) 
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        data = self._vantagepro2.read_from_eeprom("0B", 6)
         latitude, longitude, elevation = struct.unpack(b"hhh", data) 
         latitude /= 10
         longitude /= 10
@@ -665,6 +783,8 @@ class DavisVantageClient:
 
     def get_davis_time(self) -> datetime | None:
         data = None
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
             data = self._vantagepro2.gettime()
@@ -685,6 +805,8 @@ class DavisVantageClient:
         return data
 
     def set_davis_time(self, dtime: datetime) -> None:
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
             self._vantagepro2.settime(dtime)
@@ -702,11 +824,13 @@ class DavisVantageClient:
             _LOGGER.error("Couldn't set davis time: %s", e)
 
     def get_info(self) -> dict[str, Any] | None:
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
-            firmware_version = self._vantagepro2.firmware_version 
-            firmware_date = self._vantagepro2.firmware_date 
-            diagnostics = self._vantagepro2.diagnostics 
+            firmware_version = self._vantagepro2.firmware_version
+            firmware_date = self._vantagepro2.firmware_date
+            diagnostics = self._vantagepro2.diagnostics
         except Exception as e:
             raise e
         finally:
@@ -728,10 +852,12 @@ class DavisVantageClient:
         return info
 
     def get_static_info(self) -> dict[str, Any] | None:
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
-            firmware_version = self._vantagepro2.firmware_version 
-            archive_period = self._vantagepro2.archive_period 
+            firmware_version = self._vantagepro2.firmware_version
+            archive_period = self._vantagepro2.archive_period
         except Exception as e:
             raise e
         finally:
@@ -749,6 +875,8 @@ class DavisVantageClient:
         return info
 
     def set_yearly_rain(self, rain_clicks: int) -> None:
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
             self._vantagepro2.set_yearly_rain(rain_clicks)
@@ -766,6 +894,8 @@ class DavisVantageClient:
             _LOGGER.error("Couldn't set yearly rain: %s", e)
 
     def set_archive_period(self, archive_period: int) -> None:
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
             self._vantagepro2.set_archive_period(archive_period)

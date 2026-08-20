@@ -28,6 +28,29 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+
+async def _async_list_serial_ports(hass: HomeAssistant) -> list[selector.SelectOptionDict]:
+    """Enumerate available serial ports for the port-picker dropdown.
+
+    There is no "SerialPortSelector" in Home Assistant core - that never
+    existed. This is the actual standard pattern: enumerate ports with
+    pyserial and offer them as a SelectSelector, with custom_value=True so a
+    port that isn't auto-detected (e.g. inside some containers) can still be
+    typed in by hand.
+    """
+    from serial.tools.list_ports import comports
+
+    ports = await hass.async_add_executor_job(comports)
+    options = [
+        selector.SelectOptionDict(
+            value=port.device,
+            label=f"{port.device} - {port.description}" if port.description else port.device,
+        )
+        for port in sorted(ports, key=lambda p: p.device)
+    ]
+    return options
+
+
 # Schema used for reconfiguring an existing integration entry
 RECONFIGURE_SCHEMA = vol.Schema(
     {
@@ -35,7 +58,7 @@ RECONFIGURE_SCHEMA = vol.Schema(
         # LOOP 2 enable when working
 #        vol.Optional("use_loop2", default=False): bool,
         vol.Required(CONFIG_INTERVAL, default=DEFAULT_SYNC_INTERVAL): vol.All(
-            int, vol.Range(min=CONFIG_MINIMAL_INTERVAL)  # type: ignore
+            int, vol.Range(min=CONFIG_MINIMAL_INTERVAL)
         ),
     }
 )
@@ -161,8 +184,17 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "no_davis_device"
             # ---------------------------------------------------------
 
+        ports = await _async_list_serial_ports(self.hass)
         step_user_data_schema = vol.Schema(
-            {vol.Required(CONFIG_LINK): selector.SerialPortSelector()}
+            {
+                vol.Required(CONFIG_LINK): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=ports,
+                        custom_value=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            }
         )
 
         return self.async_show_form(
@@ -232,8 +264,17 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
 
         step_user_data_schema = RECONFIGURE_SCHEMA
         if self.entry.data.get(CONFIG_PROTOCOL) == PROTOCOL_SERIAL:  # type: ignore
+            ports = await _async_list_serial_ports(self.hass)
             step_user_data_schema = RECONFIGURE_SCHEMA.extend(
-                {vol.Required(CONFIG_LINK): selector.SerialPortSelector()},
+                {
+                    vol.Required(CONFIG_LINK): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=ports,
+                            custom_value=True,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                },
                 required=True,
             )
 
@@ -281,7 +322,7 @@ class DavisVantageOptionsFlowHandler(config_entries.OptionsFlow):
             {
                 vol.Optional("use_loop2", default=current_loop2): bool,
                 vol.Required(CONFIG_INTERVAL, default=current_interval): vol.All(
-                    int, vol.Range(min=CONFIG_MINIMAL_INTERVAL)  # type: ignore
+                    int, vol.Range(min=CONFIG_MINIMAL_INTERVAL)
                 ),
             }
         )

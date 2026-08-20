@@ -8,6 +8,7 @@ import inspect
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.const import Platform
 from homeassistant.exceptions import ConfigEntryNotReady
 
@@ -170,9 +171,14 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry
             elif hasattr(client, "disconnect"):
                 await hass.async_add_executor_job(client.disconnect)
             elif hasattr(client, "link") and hasattr(client.link, "close"):
-                client.link.close()
+                # client.link.close() does blocking serial I/O - keep it off the event loop.
+                await hass.async_add_executor_job(client.link.close)
         except Exception as err:
             _LOGGER.error("Error closing Davis station connection during unload: %s", err)
+
+        # Don't leave a stale "connection lost" repair issue behind if the
+        # user removes the integration while one is open.
+        ir.async_delete_issue(hass, DOMAIN, "connection_lost")
 
         # Clean up legacy dictionary reference
         hass.data[DOMAIN].pop(config_entry.entry_id, None)

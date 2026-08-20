@@ -22,6 +22,10 @@ from .const import DEFAULT_NAME
 from .coordinator import DavisVantageDataUpdateCoordinator
 from .utils import normalize_unique_id
 
+# All entities read from the shared coordinator's already-polled data rather
+# than doing their own I/O, so there's nothing for HA to serialize here.
+PARALLEL_UPDATES = 0
+
 
 @dataclass(frozen=True, kw_only=True)
 class DavisBinarySensorEntityDescription(BinarySensorEntityDescription):

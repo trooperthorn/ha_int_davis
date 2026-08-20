@@ -35,3 +35,56 @@ set_rain_collector:
             - "0.01\""
             - "0.2 mm"
             - "0.1 mm"
+set_barometer_calibration:
+  fields:
+    elevation:
+      required: true
+      example: 132
+      selector:
+        number:
+          min: -2000
+          max: 15000
+          unit_of_measurement: "ft"
+    barometer:
+      required: false
+      example: 29.491
+      selector:
+        number:
+          min: 0
+          max: 32.5
+          step: 0.001
+          unit_of_measurement: "inHg"
+get_eeprom:
+  fields:
+    address:
+      required: true
+      example: "2B"
+      selector:
+        text:
+    size:
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 256
+set_eeprom:
+  fields:
+    address:
+      required: true
+      example: "2B"
+      selector:
+        text:
+    data:
+      required: true
+      example: "13"
+      selector:
+        text:
+set_console_lamps:
+  fields:
+    state:
+      required: true
+      example: true
+      selector:
+        boolean:
+clear_alarms:
