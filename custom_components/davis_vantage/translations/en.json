@@ -1,4 +1,10 @@
 {
+    "issues": {
+        "connection_lost": {
+            "title": "Davis Vantage station unreachable",
+            "description": "{name} has failed to respond for several polling cycles in a row. This usually means the console is powered off, the serial cable is disconnected, or - if this is a USB connection - the device was reassigned to a different port after a reboot.\n\nCheck the physical connection, then use **Settings > Devices & services > {name} > Reconfigure** to verify or update the port/link."
+        }
+    },
     "config": {
         "abort": {
             "already_configured": "Device is already configured",
