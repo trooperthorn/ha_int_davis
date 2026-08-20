@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from collections.abc import Awaitable, Callable
+
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
@@ -21,6 +23,20 @@ from . import DavisConfigEntry
 TO_REDACT = {"Latitude", "Longitude", "latitude", "longitude"}
 
 
+async def _try_console_command(func: Callable[[], Awaitable[str]]) -> str:
+    """Run a console round-trip, degrading to an error string on failure.
+
+    Diagnostics are frequently downloaded *because* the console is
+    unreachable - a raised exception here would take out the whole
+    diagnostics payload (config, last polled data, raw bytes) along with
+    it, when all of that is still useful without the live console replies.
+    """
+    try:
+        return (await func()).strip()
+    except Exception as err:
+        return f"unavailable: {err}"
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, config_entry: DavisConfigEntry
 ) -> dict[str, Any]:
@@ -28,9 +44,9 @@ async def async_get_config_entry_diagnostics(
     coordinator = config_entry.runtime_data.coordinator
     client = coordinator.client
 
-    rxcheck = await client.async_get_rxcheck()
-    nver = await client.async_get_nver()
-    bardata = await client.async_get_bardata()
+    rxcheck = await _try_console_command(client.async_get_rxcheck)
+    nver = await _try_console_command(client.async_get_nver)
+    bardata = await _try_console_command(client.async_get_bardata)
 
     raw_data = dict(client.get_raw_data())
     raw_data.pop("_raw_bytes", None)
@@ -54,9 +70,9 @@ async def async_get_config_entry_diagnostics(
         },
         "console": {
             "firmware_version": client.firmware_version,
-            "rxcheck": rxcheck.strip(),
-            "nver": nver.strip(),
-            "bardata": bardata.strip(),
+            "rxcheck": rxcheck,
+            "nver": nver,
+            "bardata": bardata,
         },
         "last_data": async_redact_data(dict(coordinator.data or {}), TO_REDACT),
         "raw_loop_data": raw_data,
