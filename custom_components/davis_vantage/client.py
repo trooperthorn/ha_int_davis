@@ -37,6 +37,96 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+
+class LoopData2Parser(LoopDataParserRevB):
+    """Parse a LOOP2 packet, sent by the "LPS 2 1" command.
+
+    PyVantagePro only implements the LOOP1 packet format, so this mirrors
+    LoopDataParserRevB's approach (byte layout + unit scaling) for LOOP2,
+    per the Davis Vantage Serial Communication Reference Manual Rev 2.6.1
+    (section IX.2). Subclasses LoopDataParserRevB purely to reuse its
+    unpack_storm_date()/unpack_time() helpers; its LOOP1 __init__ is
+    intentionally not called.
+    """
+
+    LOOP2_FORMAT = (
+        ("LOO", "3s"),
+        ("BarTrend", "B"),
+        ("PacketType", "B"),
+        ("Unused0", "2s"),
+        ("Barometer", "H"),
+        ("TempIn", "h"),
+        ("HumIn", "B"),
+        ("TempOut", "h"),
+        ("WindSpeed", "B"),
+        ("Unused1", "1s"),
+        ("WindDir", "H"),
+        ("WindSpeed10Min", "H"),
+        ("WindSpeed2Min", "H"),
+        ("WindGust10Min", "H"),
+        ("WindGustDir10Min", "H"),
+        ("Unused2", "2s"),
+        ("Unused3", "2s"),
+        ("DewPoint", "h"),
+        ("Unused4", "1s"),
+        ("HumOut", "B"),
+        ("Unused5", "1s"),
+        ("HeatIndex", "h"),
+        ("WindChill", "h"),
+        ("THSWIndex", "h"),
+        ("RainRate", "H"),
+        ("UV", "B"),
+        ("SolarRad", "H"),
+        ("RainStorm", "H"),
+        ("StormStartDate", "H"),
+        ("RainDay", "H"),
+        ("RainLast15Min", "H"),
+        ("RainLastHour", "H"),
+        ("ETDay", "H"),
+        ("RainLast24Hr", "H"),
+        ("BarReductionMethod", "B"),
+        ("UserBarOffset", "h"),
+        ("BarCalNumber", "h"),
+        ("BarSensorRaw", "H"),
+        ("BarAbsolute", "H"),
+        ("AltimeterSetting", "H"),
+        ("Unused6", "2s"),
+        ("GraphPointers", "10s"),
+        ("Unused7", "12s"),
+        ("EOL", "2s"),
+        ("CRC", "H"),
+    )
+
+    def __init__(self, data: bytes) -> None:
+        # Deliberately skip LoopDataParserRevB.__init__ (LOOP1 format) and
+        # go straight to the base DataParser with our own LOOP2 format.
+        DataParser.__init__(self, data, self.LOOP2_FORMAT)
+
+        self["Barometer"] = self["Barometer"] / 1000
+        self["TempIn"] = self["TempIn"] / 10
+        self["TempOut"] = self["TempOut"] / 10
+        self["WindSpeed10Min"] = self["WindSpeed10Min"] / 10
+        self["WindSpeed2Min"] = self["WindSpeed2Min"] / 10
+        self["WindGust10Min"] = self["WindGust10Min"] / 10
+        for key in ("DewPoint", "HeatIndex", "WindChill", "THSWIndex"):
+            self[key] = None if self[key] == 255 else self[key]
+        self["RainRate"] = self["RainRate"] / 100
+        self["UV"] = self["UV"] / 10
+        self["RainStorm"] = self["RainStorm"] / 100
+        self["StormStartDate"] = self.unpack_storm_date(self["StormStartDate"])
+        self["RainDay"] = self["RainDay"] / 100
+        self["RainLast15Min"] = self["RainLast15Min"] / 100
+        self["RainLastHour"] = self["RainLastHour"] / 100
+        self["ETDay"] = self["ETDay"] / 1000
+        self["RainLast24Hr"] = self["RainLast24Hr"] / 100
+
+        # LOOP2 carries no alarm bits, battery status, forecast icon, or
+        # sunrise/sunset (those are LOOP1-only). Fill them in as None so
+        # downstream code that expects the keys doesn't KeyError.
+        self["SunRise"] = None
+        self["SunSet"] = None
+
+
 class DavisVantageClient:
     """Davis Vantage Client class"""
 
@@ -85,17 +175,11 @@ class DavisVantageClient:
         
     @property
     def link(self):
-        """Bridge to the underlying PyVantagePro link object for LOOP2 monkey patches."""
+        """Bridge to the underlying PyVantagePro link object."""
         if not self._vantagepro2:
             self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
-            self._vantagepro2.link.wakeup = self._vantagepro2.wake_up
 
         return self._vantagepro2.link
-
-    @property
-    def parser(self):
-        """Bridge to parser for Loop 2 monkey patches."""
-        return LoopDataParserRevB
 
     def get_vantagepro2fromurl(self, url: str):
         try:
@@ -162,7 +246,7 @@ class DavisVantageClient:
             
             if self._use_loop2:
                 _LOGGER.debug("Start get_current_data (LOOP 2 requested)")
-                data = self._vantagepro2.get_current_data() 
+                data = self._get_loop2_data()
             else:
                 _LOGGER.debug("Start get_current_data (LOOP 1)")
                 data = self._vantagepro2.get_current_data()
@@ -209,6 +293,22 @@ class DavisVantageClient:
 
         return data, archives, hilows
 
+    def _get_loop2_data(self) -> "LoopData2Parser":
+        """Request and parse a single LOOP2 packet.
+
+        PyVantagePro has no LOOP2 support, so this sends "LPS 2 1" directly
+        (mirroring VantagePro2.get_current_data()'s own wake_up/send/read
+        pattern) and parses the response with LoopData2Parser.
+        """
+        self._vantagepro2.wake_up()
+        self._vantagepro2.send("LPS 2 1", self._vantagepro2.ACK)
+        raw_data = self._vantagepro2.link.read(99, binary=True)
+        if len(raw_data) != 99:
+            raise ValueError(
+                f"Expected 99-byte LOOP2 packet, got {len(raw_data)} bytes"
+            )
+        return LoopData2Parser(raw_data)
+
     async def async_get_current_data(self):
         """Get current date from weather station async."""
         data = self._last_data
@@ -251,23 +351,32 @@ class DavisVantageClient:
         return data
 
     def __get_full_raw_data(self, data):
-        raw_data = DataParser(data.raw_bytes, LoopDataParserRevB.LOOP_FORMAT)  
-        raw_data["HumExtra"] = struct.unpack(b"7B", raw_data["HumExtra"])  
-        raw_data["ExtraTemps"] = struct.unpack(b"7B", raw_data["ExtraTemps"])  
-        raw_data["SoilMoist"] = struct.unpack(b"4B", raw_data["SoilMoist"])  
-        raw_data["SoilTemps"] = struct.unpack(b"4B", raw_data["SoilTemps"])  
-        raw_data["LeafWetness"] = struct.unpack(b"4B", raw_data["LeafWetness"])  
-        raw_data["LeafTemps"] = struct.unpack(b"4B", raw_data["LeafTemps"])  
+        # LOOP1 and LOOP2 packets have different byte layouts (see
+        # LoopData2Parser) - always parsing with the LOOP1 format here would
+        # silently misinterpret LOOP2 bytes and could corrupt the
+        # incorrect-value masking done downstream in remove_all_incorrect_data.
+        if self._use_loop2:
+            raw_data = DataParser(data.raw_bytes, LoopData2Parser.LOOP2_FORMAT)
+            raw_data["_raw_bytes"] = data.raw_bytes
+            return raw_data
+
+        raw_data = DataParser(data.raw_bytes, LoopDataParserRevB.LOOP_FORMAT)
+        raw_data["HumExtra"] = struct.unpack(b"7B", raw_data["HumExtra"])
+        raw_data["ExtraTemps"] = struct.unpack(b"7B", raw_data["ExtraTemps"])
+        raw_data["SoilMoist"] = struct.unpack(b"4B", raw_data["SoilMoist"])
+        raw_data["SoilTemps"] = struct.unpack(b"4B", raw_data["SoilTemps"])
+        raw_data["LeafWetness"] = struct.unpack(b"4B", raw_data["LeafWetness"])
+        raw_data["LeafTemps"] = struct.unpack(b"4B", raw_data["LeafTemps"])
         raw_data.tuple_to_dict("ExtraTemps")
         raw_data.tuple_to_dict("LeafTemps")
         raw_data.tuple_to_dict("SoilTemps")
         raw_data.tuple_to_dict("HumExtra")
         raw_data.tuple_to_dict("LeafWetness")
         raw_data.tuple_to_dict("SoilMoist")
-        
+
         # EXPOSE RAW BYTES FOR HARDWARE DIAGNOSTICS
         raw_data["_raw_bytes"] = data.raw_bytes
-        
+
         return raw_data
 
     def __get_full_raw_data_hilows(self, data):
@@ -281,11 +390,11 @@ class DavisVantageClient:
             if not self._vantagepro2:
                 self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
             self._vantagepro2.link.open()
-            self._vantagepro2.link.wakeup()
+            self._vantagepro2.wake_up()
             self._vantagepro2.link.write(command.encode('ascii'))
-            
+
             # Read response
-            response = self._vantagepro2.link.read(256)
+            response = self._vantagepro2.link.read(256, binary=True)
             if not self._persistent_connection:
                 self._vantagepro2.link.close()
             return response.decode('ascii', errors='ignore')
@@ -348,32 +457,19 @@ class DavisVantageClient:
                 data["WindDirRose"] = "n"
         # ---------------------------------------------
         
-        # --- HARDWARE DIAGNOSTICS & ALARMS EXTRACTION ---
-        # These byte offsets are only valid for LOOP1 packets. The LOOP2 packet
-        # layout is different and undocumented in our reference manual, so skip
-        # this extraction when LOOP2 is active to avoid reporting wrong data.
-        if (
-            not self._use_loop2
-            and "_raw_bytes" in self._last_raw_data
-            and len(self._last_raw_data["_raw_bytes"]) >= 99
-        ):
-            raw = self._last_raw_data["_raw_bytes"]
-            
-            # Byte 86: Transmitter Battery Status
-            data["TransmitterBatteryStatus"] = raw[86]
-            
-            # Bytes 87-88: Console Battery Voltage = ((Data * 300)/512)/100.0
-            raw_voltage = struct.unpack('<H', raw[87:89])[0]
-            data["ConsoleBatteryVoltage"] = ((raw_voltage * 300) / 512) / 100.0
-            
-            # Byte 71: Rain Alarms
-            rain_alarms = raw[71]
-            data["FlashFloodAlarm"] = bool(rain_alarms & 0x02) # Bit 1
-            data["StormRainAlarm"] = bool(rain_alarms & 0x08)  # Bit 3
-            
-            # Byte 73: Outside Alarms 2
-            out_alarms_2 = raw[73]
-            data["THSWAlarm"] = bool(out_alarms_2 & 0x01) # Bit 0
+        # --- HARDWARE DIAGNOSTICS & ALARMS ---
+        # PyVantagePro's LOOP1 parser already decodes these into named fields
+        # (see LoopDataParserRevB.__init__ in the pyvantagepro fork) - no need
+        # to re-derive them from raw byte offsets. LOOP2 packets don't carry
+        # battery status, alarm bits, or a forecast icon at all (see the
+        # Rev 2.6.1 manual's LOOP2 packet layout), so these are simply absent
+        # (None) from `data` in that mode, which downstream bool()/get() calls
+        # already handle.
+        data["TransmitterBatteryStatus"] = data.get("BatteryStatus")
+        data["ConsoleBatteryVoltage"] = data.get("BatteryVolts")
+        data["FlashFloodAlarm"] = bool(data.get("AlarmRain15min"))
+        data["StormRainAlarm"] = bool(data.get("AlarmRainStormTotal"))
+        data["THSWAlarm"] = bool(data.get("AlarmOutHighTHSW"))
         # ------------------------------------------------
 
         if data.get("RainRate") is not None:
@@ -411,7 +507,10 @@ class DavisVantageClient:
                 data[key] *= factor
 
     def remove_all_incorrect_data(self, raw_data, data):
-        data_info = {key: value for key, value in LoopDataParserRevB.LOOP_FORMAT}
+        loop_format = (
+            LoopData2Parser.LOOP2_FORMAT if self._use_loop2 else LoopDataParserRevB.LOOP_FORMAT
+        )
+        data_info = {key: value for key, value in loop_format}
         self.remove_incorrect_data(raw_data, data_info, data)
 
     def remove_all_incorrect_hilows(self, raw_data, data):
