@@ -1,0 +1,34 @@
+alias: "Weather: Close Windows & Doors When Raining"
+description: >
+  Notifies (and optionally closes covers) when the Davis station detects
+  rain while a window, door, or cover is open. Edit the "condition"
+  entity_id list below to match your actual window/door/cover entities.
+mode: single
+trigger:
+  - platform: state
+    entity_id: binary_sensor.davis_vantage_is_raining
+    to: "on"
+condition:
+  # Replace with the actual window/door/cover entity_ids you want covered.
+  # This fires only if at least one of them is currently open.
+  - condition: state
+    entity_id:
+      - binary_sensor.living_room_window
+      - binary_sensor.bedroom_window
+      - cover.garage_door
+    state: "on"
+action:
+  - action: notify.notify
+    data:
+      title: "🌧️ It's Raining"
+      message: >
+        Rain detected ({{ states('sensor.davis_vantage_rain_rate') }} in/hr) and a
+        window, door, or cover appears to be open.
+      data:
+        priority: high
+  # Uncomment to auto-close motorized covers instead of (or in addition to)
+  # just notifying. Only covers actually support "close" - a plain window/
+  # door binary_sensor can't be closed by automation.
+  # - action: cover.close_cover
+  #   target:
+  #     entity_id: cover.garage_door

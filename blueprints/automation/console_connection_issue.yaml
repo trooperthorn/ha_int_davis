@@ -1,18 +1,23 @@
-alias: "Weather Station: ISS Reception Alert"
-description: "Warns if station wireless packets are dropping during heavy weather."
+alias: "Weather Station: ISS Connection Lost"
+description: >
+  Warns if the outdoor sensor suite (ISS) stops reporting valid telemetry -
+  e.g. transmitter battery/solar failure, radio interference, or the unit
+  going out of range. Note: if this integration was set up before entity
+  translations were fixed, this binary sensor's entity_id may still be the
+  older generic "binary_sensor.davis_vantage_connectivity" - check Settings
+  > Devices & Services > Entities if the entity_id below isn't found.
 mode: single
 trigger:
-  - platform: numeric_state
-    entity_id: sensor.davis_vantage_rx_percentage
-    below: 75
+  - platform: state
+    entity_id: binary_sensor.davis_vantage_outdoor_sensor_suite_status
+    to: "off"
     for:
       minutes: 10
-condition:
-  - condition: state
-    entity_id: binary_sensor.davis_vantage_transmitter_battery
-    state: "problem"
 action:
   - action: notify.notify
     data:
-      title: "📡 Davis ISS Signal Loss"
-      message: "Wireless reception from outdoor ISS has dropped below 75%. Check transmitter battery or solar capacitor."
+      title: "📡 Davis ISS Connection Lost"
+      message: >
+        The outdoor sensor suite has stopped reporting valid data for 10+
+        minutes. Check the transmitter battery/solar panel, antenna, and
+        that the unit is still within range.

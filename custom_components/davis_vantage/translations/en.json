@@ -540,6 +540,21 @@
         "binary_sensor": {
             "is_raining": {
                 "name": "Is Raining"
+            },
+            "flash_flood_alarm": {
+                "name": "Flash Flood Alarm"
+            },
+            "storm_rain_alarm": {
+                "name": "Storm Rain Alarm"
+            },
+            "thsw_alarm": {
+                "name": "High THSW Index Alarm"
+            },
+            "tx_battery_status": {
+                "name": "Transmitter Battery Low"
+            },
+            "iss_connection": {
+                "name": "Outdoor Sensor Suite Status"
             }
         }
     },

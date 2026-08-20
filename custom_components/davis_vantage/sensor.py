@@ -276,6 +276,31 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
  #       entity_category=EntityCategory.Rain, # Hides it from the main dashboard & Voice assistants
     ),
     DavisSensorEntityDescription(
+        # Available in both LOOP1 and LOOP2. Referenced by
+        # blueprints/automation/flash_flood.yaml, which previously pointed
+        # at a sensor that didn't exist.
+        key="rain_storm",
+        translation_key="rain_storm",
+        name="Rain Storm",
+        icon="mdi:weather-pouring",
+        device_class=SensorDeviceClass.PRECIPITATION,
+        native_unit_of_measurement=UnitOfLength.INCHES,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: data.get('RainStorm'),
+    ),
+    DavisSensorEntityDescription(
+        # LOOP2-only. Same blueprint reference as rain_storm above.
+        key="rain_15_min",
+        translation_key="rain_15_min",
+        name="Rain (15 Min)",
+        icon="mdi:weather-pouring",
+        device_class=SensorDeviceClass.PRECIPITATION,
+        native_unit_of_measurement=UnitOfLength.INCHES,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data.get('RainLast15Min'),
+    ),
+    DavisSensorEntityDescription(
         key="rain_day",
         name="Rain Today",
         icon="mdi:water",

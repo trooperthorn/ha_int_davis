@@ -3,7 +3,7 @@ description: "Notifies when temperatures drop below freezing."
 mode: single
 trigger:
   - platform: numeric_state
-    entity_id: sensor.davis_vantage_temperature
+    entity_id: sensor.davis_vantage_outside_temperature
     below: 32
 condition: []
 action:
@@ -11,5 +11,5 @@ action:
     data:
       title: "❄️ Freezing Temperature Alert"
       message: >
-        Outdoor temperature has dropped to {{ states('sensor.davis_vantage_temperature') }}°F 
+        Outdoor temperature has dropped to {{ states('sensor.davis_vantage_outside_temperature') }}°F 
         (Wind Chill: {{ states('sensor.davis_vantage_wind_chill') }}°F). Protect exposed pipes and plants.

@@ -12,5 +12,5 @@ action:
       title: "☀️ Excessive Heat Warning"
       message: >
         Extreme Heat Index: {{ states('sensor.davis_vantage_heat_index') }}°F 
-        (Actual Temp: {{ states('sensor.davis_vantage_temperature') }}°F, Humidity: {{ states('sensor.davis_vantage_humidity') }}%). 
+        (Actual Temp: {{ states('sensor.davis_vantage_outside_temperature') }}°F, Humidity: {{ states('sensor.davis_vantage_outside_humidity') }}%). 
         Bring pets indoors and limit outdoor exertion.
