@@ -69,4 +69,4 @@ class TestGetWindRoseAcceptsOptional:
         assert get_wind_rose(None) is None
 
     def test_typical_bearing(self):
-        assert get_wind_rose(90.0) == "E"
+        assert get_wind_rose(90.0) == "e"

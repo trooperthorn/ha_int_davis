@@ -55,11 +55,15 @@ def get_wind_rose(degrees: float | int | str | None) -> str | None:
     except (ValueError, TypeError):
         return None
         
+    # Lowercase to match the state keys in translations/en.json and
+    # icons.json (both already have a full 16-point table for
+    # wind_direction_rose that never matched anything while this returned
+    # uppercase strings).
     compass_points = [
-        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW", "N"
+        "n", "nne", "ne", "ene", "e", "ese", "se", "sse",
+        "s", "ssw", "sw", "wsw", "w", "wnw", "nw", "nnw", "n"
     ]
-    
+
     # Each sector is 22.5 degrees. Shift by 11.25 to center North on 0/360.
     idx = int((deg + 11.25) / 22.5) % 16
     return compass_points[idx]

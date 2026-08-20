@@ -659,7 +659,8 @@ class DavisVantageClient:
         # rather than mislabeling it as "WindAvgDir".
         if wind_gust_dir not in (None, 0, 32767):
             data["WindGustDir"] = wind_gust_dir
-            data["WindGustDirRose"] = get_wind_rose(wind_gust_dir)
+            rose = get_wind_rose(wind_gust_dir)
+            data["WindGustDirRose"] = rose.lower() if isinstance(rose, str) else "n"
 
     def add_hilows_info(self, hilows, data: dict[str, Any]):
         if not hilows:

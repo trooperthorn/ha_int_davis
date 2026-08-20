@@ -159,7 +159,7 @@ class TestAddLoop2WindInfo:
         assert data["WindGust"] == 18.5
         assert data["WindSpeedAvg"] == 6.2
         assert data["WindGustDir"] == 270
-        assert data["WindGustDirRose"] == "W"
+        assert data["WindGustDirRose"] == "w"
         assert "WindSpeedBft" in data
 
     def test_never_fabricates_a_true_average_direction(self):
