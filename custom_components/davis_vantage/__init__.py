@@ -160,19 +160,11 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry
         coordinator = config_entry.runtime_data.coordinator
         client = coordinator.client
 
-        # Release the serial/TCP connection to prevent 'Resource busy' errors on reload
+        # Release the serial/TCP connection to prevent 'Resource busy' errors on reload.
+        # async_close() only touches the connection if one was actually opened -
+        # it never triggers the `link` property's lazy-connect behavior.
         try:
-            if hasattr(client, "close") and inspect.iscoroutinefunction(client.close):
-                await client.close()
-            elif hasattr(client, "close"):
-                await hass.async_add_executor_job(client.close)
-            elif hasattr(client, "disconnect") and inspect.iscoroutinefunction(client.disconnect):
-                await client.disconnect()
-            elif hasattr(client, "disconnect"):
-                await hass.async_add_executor_job(client.disconnect)
-            elif hasattr(client, "link") and hasattr(client.link, "close"):
-                # client.link.close() does blocking serial I/O - keep it off the event loop.
-                await hass.async_add_executor_job(client.link.close)
+            await client.async_close()
         except Exception as err:
             _LOGGER.error("Error closing Davis station connection during unload: %s", err)
 

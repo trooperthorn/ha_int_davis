@@ -4,7 +4,10 @@ These exercise DavisVantageClient's data massaging (rain-unit correction,
 dash-value masking, archive/LOOP2 wind-info population) and LoopData2Parser
 directly, without touching any serial I/O.
 """
+import asyncio
 import struct
+import time
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -281,3 +284,55 @@ class TestLoopData2Parser:
         assert parsed["RainDay"] == pytest.approx(5.0)
         assert parsed["RainLast15Min"] == pytest.approx(0.1)
         assert parsed["ETDay"] == pytest.approx(0.025)
+
+
+class TestAsyncClose:
+    async def test_noop_when_never_connected(self):
+        client = make_client()
+        client._vantagepro2 = None
+        # Must not attempt to open a connection just to close it.
+        await client.async_close()
+
+    async def test_closes_link_when_connected(self):
+        client = make_client()
+        client._vantagepro2.link = MagicMock()
+
+        await client.async_close()
+
+        client._vantagepro2.link.close.assert_called_once()
+
+    async def test_close_error_is_caught_not_raised(self):
+        client = make_client()
+        client._vantagepro2.link = MagicMock()
+        client._vantagepro2.link.close.side_effect = OSError("port already gone")
+
+        # Errors during shutdown must not prevent the unload from completing.
+        await client.async_close()
+
+
+class TestIoLockSerializesConcurrentAccess:
+    async def test_concurrent_calls_do_not_overlap_on_the_device(self):
+        # Two blocking calls that each hold "the device" for a bit - without
+        # the lock, run_in_executor's default thread pool would run them on
+        # separate threads at the same time, which for a real serial port
+        # means interleaved reads/writes on the wire.
+        client = make_client()
+        overlap_detected = False
+        busy = False
+
+        def slow_operation():
+            nonlocal overlap_detected, busy
+            if busy:
+                overlap_detected = True
+            busy = True
+            time.sleep(0.05)
+            busy = False
+
+        client.get_static_info = slow_operation  # type: ignore[method-assign]
+        client.get_info = slow_operation  # type: ignore[method-assign]
+
+        await asyncio.gather(
+            client.async_get_static_info(), client.async_get_info()
+        )
+
+        assert overlap_detected is False

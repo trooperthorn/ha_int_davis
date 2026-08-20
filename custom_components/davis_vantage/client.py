@@ -156,6 +156,15 @@ class DavisVantageClient:
         self._persistent_connection = persistent_connection
         self._use_loop2 = use_loop2  # CRITICAL FIX: Uncommented
         self._baud_rate = baud_rate or DEFAULT_BAUD_RATE
+        # All serial I/O runs via loop.run_in_executor(None, ...), which uses
+        # the default (multi-worker) thread pool. Without this lock, a
+        # service call (e.g. set_console_lamps) firing while the coordinator's
+        # poll is mid-flight would run on a second thread and touch the same
+        # underlying pyserial connection concurrently - corrupting the
+        # wake-up handshake or interleaving bytes on the wire. Every async_*
+        # method below takes this lock before handing work to the executor,
+        # so all device access is serialized regardless of which thread runs it.
+        self._io_lock = asyncio.Lock()
 
     @property
     def latitude(self) -> float:
@@ -195,7 +204,8 @@ class DavisVantageClient:
         vp = None
         try:
             loop = asyncio.get_event_loop()
-            vp = await loop.run_in_executor(None, self.get_vantagepro2fromurl, url)
+            async with self._io_lock:
+                vp = await loop.run_in_executor(None, self.get_vantagepro2fromurl, url)
         except Exception as e:
             _LOGGER.error("Error on opening device from url: %s: %s", url, e)
         return vp
@@ -208,7 +218,8 @@ class DavisVantageClient:
         if not self._vantagepro2:
             raise ConnectionError(f"Failed to create VantagePro2 object for {self._link}")
 
-        await self._hass.async_add_executor_job(self._vantagepro2.link.open)
+        async with self._io_lock:
+            await self._hass.async_add_executor_job(self._vantagepro2.link.open)
 
         if not hasattr(self._vantagepro2, "link") or self._vantagepro2.link is None:
             raise ConnectionError(
@@ -320,9 +331,10 @@ class DavisVantageClient:
         data = self._last_data
         try:
             loop = asyncio.get_event_loop()
-            new_data, archives, hilows = await loop.run_in_executor(
-                None, self.get_current_data
-            )
+            async with self._io_lock:
+                new_data, archives, hilows = await loop.run_in_executor(
+                    None, self.get_current_data
+                )
             if new_data:
                 new_raw_data = self.__get_full_raw_data(new_data)
                 self._last_raw_data = new_raw_data
@@ -408,7 +420,8 @@ class DavisVantageClient:
             return response.decode('ascii', errors='ignore')
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, send_cmd)
+        async with self._io_lock:
+            return await loop.run_in_executor(None, send_cmd)
 
     async def async_set_console_lamps(self, state: bool):
         """Turn the physical console backlight on (1) or off (0)."""
@@ -460,7 +473,8 @@ class DavisVantageClient:
     async def async_get_eeprom(self, address_hex: str, size: int) -> str:
         """Read EEPROM bytes and return them as a hex string."""
         loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, self.get_eeprom, address_hex, size)
+        async with self._io_lock:
+            data = await loop.run_in_executor(None, self.get_eeprom, address_hex, size)
         return data.hex()
 
     def set_eeprom(self, address_hex: str, data: bytes) -> None:
@@ -486,7 +500,8 @@ class DavisVantageClient:
         """Write a hex string of bytes to EEPROM starting at `address_hex`."""
         data = bytes.fromhex(data_hex)
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.set_eeprom, address_hex, data)
+        async with self._io_lock:
+            await loop.run_in_executor(None, self.set_eeprom, address_hex, data)
     # -----------------------------
 
     def add_additional_info(self, data: dict[str, Any]) -> None:
@@ -734,7 +749,8 @@ class DavisVantageClient:
         info = ""
         try:
             loop = asyncio.get_event_loop()
-            info = await loop.run_in_executor(None, self.get_rain_collector)
+            async with self._io_lock:
+                info = await loop.run_in_executor(None, self.get_rain_collector)
         except Exception as e:
             _LOGGER.error("Couldn't get rain collector: %s", e)
         return info
@@ -756,7 +772,8 @@ class DavisVantageClient:
     async def async_set_rain_collector(self, rain_collector: str):
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.set_rain_collector, rain_collector)
+            async with self._io_lock:
+                await loop.run_in_executor(None, self.set_rain_collector, rain_collector)
         except Exception as e:
             _LOGGER.error("Couldn't set rain collector: %s", e)
 
@@ -774,9 +791,10 @@ class DavisVantageClient:
         latitude = longitude = elevation = None
         try:
             loop = asyncio.get_event_loop()
-            latitude, longitude, elevation = await loop.run_in_executor(
-                None, self.get_latitude_longitude_elevation
-            )
+            async with self._io_lock:
+                latitude, longitude, elevation = await loop.run_in_executor(
+                    None, self.get_latitude_longitude_elevation
+                )
         except Exception as e:
             _LOGGER.error("Couldn't get latitude longitude: %s", e)
         return latitude, longitude, elevation
@@ -799,7 +817,8 @@ class DavisVantageClient:
         data = None
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self.get_davis_time)
+            async with self._io_lock:
+                data = await loop.run_in_executor(None, self.get_davis_time)
         except Exception as e:
             _LOGGER.error("Couldn't get davis time: %s", e)
         return data
@@ -819,7 +838,8 @@ class DavisVantageClient:
     async def async_set_davis_time(self) -> None:
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.set_davis_time, datetime.now())
+            async with self._io_lock:
+                await loop.run_in_executor(None, self.set_davis_time, datetime.now())
         except Exception as e:
             _LOGGER.error("Couldn't set davis time: %s", e)
 
@@ -846,7 +866,8 @@ class DavisVantageClient:
         info = None
         try:
             loop = asyncio.get_event_loop()
-            info = await loop.run_in_executor(None, self.get_info)
+            async with self._io_lock:
+                info = await loop.run_in_executor(None, self.get_info)
         except Exception as e:
             _LOGGER.error("Couldn't get firmware info: %s", e)
         return info
@@ -869,7 +890,8 @@ class DavisVantageClient:
         info = None
         try:
             loop = asyncio.get_event_loop()
-            info = await loop.run_in_executor(None, self.get_static_info)
+            async with self._io_lock:
+                info = await loop.run_in_executor(None, self.get_static_info)
         except Exception as e:
             _LOGGER.error("Couldn't get static info: %s", e)
         return info
@@ -889,7 +911,8 @@ class DavisVantageClient:
     async def async_set_yearly_rain(self, rain_clicks: int) -> None:
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.set_yearly_rain, rain_clicks)
+            async with self._io_lock:
+                await loop.run_in_executor(None, self.set_yearly_rain, rain_clicks)
         except Exception as e:
             _LOGGER.error("Couldn't set yearly rain: %s", e)
 
@@ -908,9 +931,31 @@ class DavisVantageClient:
     async def async_set_archive_period(self, archive_period: int) -> None:
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.set_archive_period, archive_period)
+            async with self._io_lock:
+                await loop.run_in_executor(None, self.set_archive_period, archive_period)
         except Exception as e:
             _LOGGER.error("Couldn't set archive period: %s", e)
+
+    async def async_close(self) -> None:
+        """Release the underlying serial/TCP connection, if one is open.
+
+        Deliberately checks `self._vantagepro2` directly rather than the
+        `link` property - that property lazily *opens* a connection when
+        none exists yet, which would be exactly wrong during shutdown.
+        """
+        if self._vantagepro2 is None:
+            return
+
+        def _close() -> None:
+            assert self._vantagepro2 is not None
+            self._vantagepro2.link.close()
+
+        loop = asyncio.get_event_loop()
+        async with self._io_lock:
+            try:
+                await loop.run_in_executor(None, _close)
+            except Exception as e:
+                _LOGGER.error("Error closing Davis station connection: %s", e)
 
     def get_iso_now(self) -> datetime:
         now = convert_to_iso_datetime(
