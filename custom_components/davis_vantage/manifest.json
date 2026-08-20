@@ -4,10 +4,10 @@
   "codeowners": ["@trooperthorn"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/trooperthorn/ha_int_elkm1",
+  "documentation": "https://github.com/trooperthorn/ha_int_davis",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/trooperthorn/ha_int_elkm1/issues",
+  "issue_tracker": "https://github.com/trooperthorn/ha_int_davis/issues",
   "quality_scale": "platinum",
-  "requirements": ["PyVantagePro@git+https://github.com/trooperthorn/PyVantagePro.git#branch=main"],
+  "requirements": ["PyVantagePro@git+https://github.com/trooperthorn/PyVantagePro.git@master"],
   "version": "2026.08.17"
 }
