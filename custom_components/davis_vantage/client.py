@@ -264,18 +264,23 @@ class DavisVantageClient:
         except Exception as e:
             _LOGGER.error("Couldn't get hilows: %s", e)
             
-        try:
-            end_datetime = datetime.now()
-            start_datetime = end_datetime - timedelta(
-                minutes=self._vantagepro2.archive_period * 2 
-            )
-            _LOGGER.debug("Start get_archives")
-            archives = self._vantagepro2.get_archives(start_datetime, end_datetime)  
-            _LOGGER.debug("End get_archives")
-        except Exception as e:
-            _LOGGER.debug("Skipping archive sync (non-fatal serial/encoding hiccup): %s", e)
-            archives = None
-            
+        # LOOP2 already carries a rolling 10-min wind gust + average natively
+        # (see add_loop2_wind_info), so the archive fetch below - otherwise
+        # needed purely to derive gust/average wind from DMPAFT - would just
+        # be a redundant round trip. Skip it in LOOP2 mode.
+        if not self._use_loop2:
+            try:
+                end_datetime = datetime.now()
+                start_datetime = end_datetime - timedelta(
+                    minutes=self._vantagepro2.archive_period * 2
+                )
+                _LOGGER.debug("Start get_archives")
+                archives = self._vantagepro2.get_archives(start_datetime, end_datetime)
+                _LOGGER.debug("End get_archives")
+            except Exception as e:
+                _LOGGER.debug("Skipping archive sync (non-fatal serial/encoding hiccup): %s", e)
+                archives = None
+
         # The rain collector type rarely changes and reading it costs an extra
         # wake-up + serial round trip. Fetch it once and reuse the cached value
         # on subsequent polls to keep per-poll latency down.
@@ -326,6 +331,8 @@ class DavisVantageClient:
                 
                 if archives:
                     self.add_archive_info(archives, new_data)
+                elif self._use_loop2:
+                    self.add_loop2_wind_info(new_data)
                 if hilows:
                     new_raw_hilows = self.__get_full_raw_data_hilows(hilows)
                     self._last_raw_hilows = new_raw_hilows
@@ -417,16 +424,29 @@ class DavisVantageClient:
     # -----------------------------
 
     def add_additional_info(self, data: dict[str, Any]) -> None:
+        # LOOP2 packets already carry console-computed DewPoint, HeatIndex,
+        # and WindChill (LoopData2Parser) - prefer those over the client-side
+        # formulas below rather than clobbering real values with estimates.
+        # LOOP1 has none of these, so they're always None going in and the
+        # formulas fill them in as before.
         if data.get("TempOut") is not None:
             if data.get("HumOut") is not None:
-                data["HeatIndex"] = calc_heat_index(data["TempOut"], data["HumOut"])
-                data["DewPoint"] = calc_dew_point(data["TempOut"], data["HumOut"])
+                if data.get("HeatIndex") is None:
+                    data["HeatIndex"] = calc_heat_index(data["TempOut"], data["HumOut"])
+                if data.get("DewPoint") is None:
+                    data["DewPoint"] = calc_dew_point(data["TempOut"], data["HumOut"])
             if data.get("WindSpeed") is not None:
-                data["WindChill"] = calc_wind_chill(data["TempOut"], data["WindSpeed"])
+                if data.get("WindChill") is None:
+                    data["WindChill"] = calc_wind_chill(data["TempOut"], data["WindSpeed"])
                 if data.get("HumOut") is not None:
-                    data["FeelsLike"] = calc_feels_like(
-                        data["TempOut"], data["HumOut"], data["WindSpeed"]
-                    )
+                    # THSW (Temp-Humidity-Sun-Wind) is Davis's own "feels
+                    # like" figure and is strictly better than the generic
+                    # calc_feels_like() estimate when LOOP2 provides it.
+                    data["FeelsLike"] = data.get("THSWIndex")
+                    if data["FeelsLike"] is None:
+                        data["FeelsLike"] = calc_feels_like(
+                            data["TempOut"], data["HumOut"], data["WindSpeed"]
+                        )
                     
         # --- ROBUST WIND DIRECTION & ROSE SYNC FIX ---
         wind_dir = data.get("WindDir")
@@ -549,6 +569,30 @@ class DavisVantageClient:
             data["WindSpeedBft"] = convert_kmh_to_bft(
                 convert_to_kmh(data["WindSpeedAvg"])
             )
+
+    def add_loop2_wind_info(self, data: dict[str, Any]):
+        """Populate gust/average wind fields directly from a LOOP2 packet.
+
+        LOOP2 already carries a rolling 10-minute wind gust and average
+        (see LoopData2Parser), which is what add_archive_info() otherwise
+        derives from a DMPAFT archive fetch - so this replaces that round
+        trip in LOOP2 mode instead of duplicating it.
+        """
+        wind_gust = data.get("WindGust10Min")
+        wind_avg = data.get("WindSpeed10Min")
+        wind_gust_dir = data.get("WindGustDir10Min")
+
+        if wind_gust is not None:
+            data["WindGust"] = wind_gust
+        if wind_avg is not None:
+            data["WindSpeedAvg"] = wind_avg
+            data["WindSpeedBft"] = convert_kmh_to_bft(convert_to_kmh(wind_avg))
+        # LOOP2 has no true 10-minute *average* direction field, only the
+        # direction of the 10-minute gust - expose it under its own name
+        # rather than mislabeling it as "WindAvgDir".
+        if wind_gust_dir not in (None, 0, 32767):
+            data["WindGustDir"] = wind_gust_dir
+            data["WindGustDirRose"] = get_wind_rose(wind_gust_dir)
 
     def add_hilows_info(self, hilows, data: dict[str, Any]):
         if not hilows:

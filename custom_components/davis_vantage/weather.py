@@ -169,8 +169,12 @@ class DavisWeatherEntity(CoordinatorEntity, WeatherEntity):
     @property
     def native_apparent_temperature(self) -> float | None:
         """Return the feels-like temperature in °F."""
-        # Davis provides several options; HeatIndex or THSWIndex are most common for apparent temp
-        return self.coordinator.data.get("HeatIndex")
+        # THSW (Temp-Humidity-Sun-Wind) is Davis's own apparent-temperature
+        # figure and is only available in LOOP2 mode; fall back to HeatIndex
+        # (available in both modes) when it isn't.
+        data = self.coordinator.data
+        thsw = data.get("THSWIndex")
+        return thsw if thsw is not None else data.get("HeatIndex")
 
     @property
     def native_dew_point(self) -> float | None:

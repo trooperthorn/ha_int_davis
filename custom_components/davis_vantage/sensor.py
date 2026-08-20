@@ -235,11 +235,22 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         key="wind_direction_rose",
         name="Wind Direction (Rose)",
         icon="mdi:compass",
-        # Notice we don't use a unit_of_measurement or state_class 
+        # Notice we don't use a unit_of_measurement or state_class
         # because this is a text string, not a numerical measurement!
         # value_fn=lambda data: get_wind_rose(data.get('WindDir')),
         # Updated Wind Rose
         value_fn=lambda data: get_wind_rose(data.get('WindDir')) if data.get('WindDir') not in (None, 0, 32767) else None,
+    ),
+    DavisSensorEntityDescription(
+        # Only populated in LOOP2 mode (add_loop2_wind_info in client.py) -
+        # the direction of the last 10-minute gust, not an average direction.
+        key="wind_gust_direction",
+        name="Wind Gust Direction",
+        icon="mdi:compass-outline",
+        native_unit_of_measurement="°",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data.get('WindGustDir'),
     ),
     DavisSensorEntityDescription(
         key="barometer",
@@ -352,6 +363,18 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda data: float(data.get('FeelsLike')) if data.get('FeelsLike') is not None else None,
+    ),
+    DavisSensorEntityDescription(
+        # THSW (Temp-Humidity-Sun-Wind) index: Davis's own apparent-temperature
+        # figure, only available in LOOP2 mode - see LoopData2Parser.
+        key="THSWIndex",
+        name="THSW Index",
+        icon="mdi:sun-thermometer-outline",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data.get('THSWIndex'),
     ),
     DavisSensorEntityDescription(
         key="DewPoint",
