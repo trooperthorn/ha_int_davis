@@ -11,8 +11,11 @@
             "reconfigure_successful": "Re-configuration was successful"
         },
         "error": {
-            "cannot_connect": "Failed to connect",
+            "cannot_connect": "Failed to connect to the weather station. Please verify the port or network address.",
             "invalid_auth": "Looks like the weather station isn't reacting, try again",
+            "no_davis_device": "No Davis console responded. Check serial cable seating and verify the console is powered.",
+            "unsupported_loop2": "The console rejected the LOOP2 command (LPS 2 1). Verify your firmware is version 1.90+ or disable LOOP2.",
+            "timeout": "Console took too long to wake up or send an ACK byte.",
             "unknown": "Unexpected error"
         },
         "step": {
