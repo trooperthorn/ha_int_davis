@@ -6,7 +6,6 @@ from datetime import datetime, time, date, timedelta
 from typing import Any
 import logging
 
-from functools import cached_property
 from zoneinfo import ZoneInfo
 from pyvantagepro import VantagePro2
 from pyvantagepro.parser import HighLowParserRevB, LoopDataParserRevB, DataParser
@@ -730,8 +729,15 @@ class DavisVantageClient:
         else:
             return datetime.strptime(date_str, "%Y-%m-%d").date()
 
-    def clear_cached_property(self, property_name: str):
-        del self._vantagepro2.__dict__[property_name]
+    def clear_cached_property(self, property_name: str) -> None:
+        """Invalidate a functools.cached_property on the underlying VantagePro2.
+
+        Safe to call even if the property was never accessed yet (nothing
+        cached) or no connection has been made yet (_vantagepro2 is None) -
+        the caller only wants "make sure it's not stale", not an error.
+        """
+        if self._vantagepro2 is not None:
+            self._vantagepro2.__dict__.pop(property_name, None)
 
     def get_rain_collector(self) -> str:
         rain_collector_map = {
