@@ -3,7 +3,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import logging
-import inspect
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -122,11 +121,10 @@ async def async_setup_entry(
         await coordinator.async_config_entry_first_refresh()
     except Exception as err:
         _LOGGER.warning("Initial refresh failed for Davis Vantage (%s). Retrying...", err)
-        # Ensure connection is closed before failing setup to release the port
-        if hasattr(client, "close"):
-            await client.close()
-        elif hasattr(client, "disconnect"):
-            await client.disconnect()
+        # Ensure the connection is closed before failing setup, so HA's
+        # automatic retry of ConfigEntryNotReady doesn't hit "Resource busy"
+        # trying to reopen a port this entry never released.
+        await client.async_close()
         raise ConfigEntryNotReady(f"Initial data fetch failed: {err}") from err
 
     # 6. Store references
@@ -142,10 +140,9 @@ async def async_setup_entry(
     )
 
     # 9. Register Services / Actions
-    if inspect.iscoroutinefunction(DavisServicesSetup):
-        await DavisServicesSetup(hass, config_entry)
-    elif callable(DavisServicesSetup):
-        await hass.async_add_executor_job(DavisServicesSetup, hass, config_entry)
+    # DavisServicesSetup.__init__ calls hass.services.register() (the
+    # thread-safe sync variant, per services.py) - run it off the event loop.
+    await hass.async_add_executor_job(DavisServicesSetup, hass, config_entry)
 
     return True
 
