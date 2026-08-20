@@ -36,9 +36,12 @@
             },
             "setup_other_info": {
                 "data": {
-                    "station_model": "Davis weather station model",
                     "interval": "Interval",
+                    "use_loop2": "Enable LOOP2 Protocol",
                     "persistent_connection": "Persistent Connection"
+                },
+                "data_description": {
+                    "use_loop2": "Requests expanded LOOP2 data packets (LPS 2 1). Requires Vantage Pro2 or Vantage Vue console firmware v1.90 or newer. Leave disabled if you have older firmware or experience communication timeouts."
                 }
             },
             "reconfigure_confirm": {
@@ -46,6 +49,22 @@
                 "data": {
                     "link": "Host",
                     "interval": "Interval"
+                }
+            }
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Davis Vantage Options",
+                "description": "Update station polling interval and protocol settings.",
+                "data": {
+                    "use_loop2": "Enable LOOP2 Protocol",
+                    "interval": "Polling Interval (seconds)"
+                },
+                "data_description": {
+                    "use_loop2": "Requires firmware v1.90+. Leave disabled if your console does not support LOOP2.",
+                    "interval": "Polling frequency in seconds. Standard range is 30 to 300 seconds."
                 }
             }
         }
