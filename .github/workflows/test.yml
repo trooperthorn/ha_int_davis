@@ -24,3 +24,6 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v
+
+      - name: Type check
+        run: mypy custom_components/davis_vantage/

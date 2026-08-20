@@ -19,6 +19,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.sun import is_up
 from homeassistant.util import dt as dt_util
 
+# The single weather entity reads from the shared coordinator's already-
+# polled data rather than doing its own I/O, so there's nothing for HA to
+# serialize here.
+PARALLEL_UPDATES = 0
+
 # Davis Protocol v2.61 forecast icon -> HA condition string.
 # See client.py add_additional_info / manual section IX.1 "Forecast Icons".
 FORECAST_ICON_TO_CONDITION = {

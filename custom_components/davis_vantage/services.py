@@ -7,7 +7,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from pyvantagepro.utils import bytes_to_hex  # type: ignore
+from pyvantagepro.utils import bytes_to_hex
 
 from .const import (
     DOMAIN,
@@ -210,8 +210,8 @@ class DavisServicesSetup:
         raw_data = client.get_raw_data()
         raw_data.update(client.get_raw_hilows())
         data: dict[str, Any] = {}
-        for key in raw_data:  # type: ignore
-            value = raw_data[key]  # type: ignore
+        for key in raw_data:
+            value = raw_data[key]
             if isinstance(value, bytes):
                 data[key] = bytes_to_hex(value)
             else:

@@ -127,7 +127,7 @@ def calc_feels_like(temperature_f: float, humidity: float, windspeed_mph: float)
 def convert_to_iso_datetime(value: datetime, tzinfo: ZoneInfo) -> datetime:
     return value.replace(tzinfo=tzinfo)
 
-def get_wind_rose(bearing: int) -> str:
+def get_wind_rose(bearing: float) -> str:
     directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
     index = round(bearing / 22.5) % 16
     return directions[index]

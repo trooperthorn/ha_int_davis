@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
+from typing import cast
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -32,6 +33,10 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+# All entities read from the shared coordinator's already-polled data rather
+# than doing their own I/O, so there's nothing for HA to serialize here.
+PARALLEL_UPDATES = 0
+
 def safe_get(data, key):
     """Safely extract a value from parser objects or dictionaries."""
     try:
@@ -59,6 +64,39 @@ def get_wind_rose(degrees: float | int | str | None) -> str | None:
     idx = int((deg + 11.25) / 22.5) % 16
     return compass_points[idx]
 
+
+def _float_or_none(data: dict, key: str) -> float | None:
+    """Read `key` from `data` as a float, or None if missing."""
+    value = data.get(key)
+    return float(value) if value is not None else None
+
+
+def _wind_dir_or_none(data: dict) -> float | None:
+    """Read WindDir as a float, treating calm/dashed (0, 32767) as unknown."""
+    value = data.get('WindDir')
+    return float(value) if value not in (None, 0, 32767) else None
+
+
+def _barometer_or_none(data: dict) -> float | None:
+    """Read Barometer, discarding readings outside the console's 20.0-32.5 inHg range."""
+    value = data.get('Barometer')
+    if value is None:
+        return None
+    value = float(value)
+    return value if 20.0 <= value <= 32.5 else None
+
+def _map_forecast_icon(data: dict, mapping: dict[int, str], default: str) -> str:
+    """Map the Davis ForecastIcon field through `mapping`, falling back to `default`."""
+    raw_icon = data.get("ForecastIcon")
+    try:
+        icon_val = (
+            int(raw_icon) if raw_icon not in (None, "", 255, 32767, -32768) else -1
+        )
+    except (TypeError, ValueError):
+        icon_val = -1
+    return mapping.get(icon_val, default)
+
+
 @dataclass(frozen=True, kw_only=True)
 class DavisSensorEntityDescription(SensorEntityDescription):
     """Class describing Davis Vantage sensor entities."""
@@ -73,7 +111,11 @@ class DavisSensorEntityDescription(SensorEntityDescription):
 # ---------------------------------------------------------
 SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     DavisSensorEntityDescription(
-        key="ForecastIcon",
+        # NOTE: this used to share key="ForecastIcon" with the "condition"
+        # entry below, which gives both the same unique_id - HA silently
+        # drops whichever loses that race, so this entity could never
+        # actually be enabled. Gave it its own key.
+        key="forecast_icon_condition",
         translation_key="forecast_icon",
         name="Current Condition",
         device_class=SensorDeviceClass.ENUM,
@@ -88,18 +130,22 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
             "snowy",
             "snowy-rainy",
         ],
-        value_fn=lambda data: {
-            0: "sunny",        # Default state when console is waiting for 3-hr barometric trend
-            8: "sunny",        # Sun (Mostly Clear)
-            6: "partlycloudy", # Partial Sun + Cloud (Partly Cloudy)
-            2: "cloudy",       # Cloud (Mostly Cloudy)
-            7: "rainy",        # Partial Sun + Cloud + Rain (Rain within 12 hrs)
-            3: "cloudy",       # Cloud + Rain (Rain within 12 hrs)
-            18: "snowy",       # Cloud + Snow (Snow within 12 hrs)
-            22: "snowy",       # Partial Sun + Cloud + Snow (Snow within 12 hrs)
-            19: "snowy-rainy", # Cloud + Rain + Snow (Rain or Snow within 12 hrs)
-            23: "snowy-rainy", # Partial Sun + Cloud + Rain + Snow (Rain or Snow)
-        }.get(data.get("ForecastIcon"), "sunny"),
+        value_fn=lambda data: _map_forecast_icon(
+            data,
+            {
+                0: "sunny",        # Default state when console is waiting for 3-hr barometric trend
+                8: "sunny",        # Sun (Mostly Clear)
+                6: "partlycloudy", # Partial Sun + Cloud (Partly Cloudy)
+                2: "cloudy",       # Cloud (Mostly Cloudy)
+                7: "rainy",        # Partial Sun + Cloud + Rain (Rain within 12 hrs)
+                3: "cloudy",       # Cloud + Rain (Rain within 12 hrs)
+                18: "snowy",       # Cloud + Snow (Snow within 12 hrs)
+                22: "snowy",       # Partial Sun + Cloud + Snow (Snow within 12 hrs)
+                19: "snowy-rainy", # Cloud + Rain + Snow (Rain or Snow within 12 hrs)
+                23: "snowy-rainy", # Partial Sun + Cloud + Rain + Snow (Rain or Snow)
+            },
+            "sunny",
+        ),
     ),
     DavisSensorEntityDescription(
         key="ForecastIcon",
@@ -115,18 +161,22 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
             "Snowy",
             "Snowy Rainy",
         ],
-        value_fn=lambda data: {
-            0: "Sunny",        # Default state when console is waiting for 3-hr barometric trend
-            8: "Sunny",        # Sun (Mostly Clear)
-            6: "Partly Cloudy", # Partial Sun + Cloud (Partly Cloudy)
-            2: "Cloudy",       # Cloud (Mostly Cloudy)
-            7: "Rainy",        # Partial Sun + Cloud + Rain (Rain within 12 hrs)
-            3: "Cloudy",       # Cloud + Rain (Rain within 12 hrs)
-            18: "Snowy",       # Cloud + Snow (Snow within 12 hrs)
-            22: "Snowy",       # Partial Sun + Cloud + Snow (Snow within 12 hrs)
-            19: "Snowy Rainy", # Cloud + Rain + Snow (Rain or Snow within 12 hrs)
-            23: "Snowy Rainy", # Partial Sun + Cloud + Rain + Snow (Rain or Snow)
-        }.get(data.get("ForecastIcon"), "Sunny"),
+        value_fn=lambda data: _map_forecast_icon(
+            data,
+            {
+                0: "Sunny",        # Default state when console is waiting for 3-hr barometric trend
+                8: "Sunny",        # Sun (Mostly Clear)
+                6: "Partly Cloudy", # Partial Sun + Cloud (Partly Cloudy)
+                2: "Cloudy",       # Cloud (Mostly Cloudy)
+                7: "Rainy",        # Partial Sun + Cloud + Rain (Rain within 12 hrs)
+                3: "Cloudy",       # Cloud + Rain (Rain within 12 hrs)
+                18: "Snowy",       # Cloud + Snow (Snow within 12 hrs)
+                22: "Snowy",       # Partial Sun + Cloud + Snow (Snow within 12 hrs)
+                19: "Snowy Rainy", # Cloud + Rain + Snow (Rain or Snow within 12 hrs)
+                23: "Snowy Rainy", # Partial Sun + Cloud + Rain + Snow (Rain or Snow)
+            },
+            "Sunny",
+        ),
     ),
     DavisSensorEntityDescription(
         key="forecast_rule",
@@ -155,7 +205,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: float(data.get('TempOut')) if data.get('TempOut') is not None else None,
+        value_fn=lambda data: _float_or_none(data, 'TempOut'),
     ),
     DavisSensorEntityDescription(
         key="inside_temperature",
@@ -227,9 +277,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         icon="mdi:compass-outline",
         native_unit_of_measurement="°",
         state_class=SensorStateClass.MEASUREMENT,
-        # value_fn=lambda data: float(data.get('WindDir')) if data.get('WindDir') is not None else 0,
-        # Updated Wind Direction to overcome manual data returned
-        value_fn=lambda data: float(data.get('WindDir')) if data.get('WindDir') not in (None, 0, 32767) else None,
+        value_fn=_wind_dir_or_none,
     ),
     DavisSensorEntityDescription(
         key="wind_direction_rose",
@@ -237,9 +285,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         icon="mdi:compass",
         # Notice we don't use a unit_of_measurement or state_class
         # because this is a text string, not a numerical measurement!
-        # value_fn=lambda data: get_wind_rose(data.get('WindDir')),
-        # Updated Wind Rose
-        value_fn=lambda data: get_wind_rose(data.get('WindDir')) if data.get('WindDir') not in (None, 0, 32767) else None,
+        value_fn=lambda data: get_wind_rose(_wind_dir_or_none(data)),
     ),
     DavisSensorEntityDescription(
         # Only populated in LOOP2 mode (add_loop2_wind_info in client.py) -
@@ -259,9 +305,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.ATMOSPHERIC_PRESSURE,
         native_unit_of_measurement=UnitOfPressure.INHG,
         state_class=SensorStateClass.MEASUREMENT,
-        # value_fn=lambda data: data['Barometer'], # Use the exact PyVantagePro key here
-        # Updated Barometer Davis console physically cannot log barometer readings outside the 20.000 to 32.50 inHg range.
-        value_fn=lambda data: data.get('Barometer') if data.get('Barometer') is not None and 20.0 <= float(data.get('Barometer')) <= 32.5 else None,
+        value_fn=_barometer_or_none,
     ),
 
     # --- PRECIPITATION (RATES & CUMULATIVE) ---
@@ -369,7 +413,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: float(data.get('HeatIndex')) if data.get('HeatIndex') is not None else None,
+        value_fn=lambda data: _float_or_none(data, 'HeatIndex'),
     ),
     DavisSensorEntityDescription(
         key="WindChill",
@@ -378,7 +422,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: float(data.get('WindChill')) if data.get('WindChill') is not None else None,
+        value_fn=lambda data: _float_or_none(data, 'WindChill'),
     ),
     DavisSensorEntityDescription(
         key="FeelsLike",
@@ -387,7 +431,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: float(data.get('FeelsLike')) if data.get('FeelsLike') is not None else None,
+        value_fn=lambda data: _float_or_none(data, 'FeelsLike'),
     ),
     DavisSensorEntityDescription(
         # THSW (Temp-Humidity-Sun-Wind) index: Davis's own apparent-temperature
@@ -408,7 +452,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: float(data.get('DewPoint')) if data.get('DewPoint') is not None else None,
+        value_fn=lambda data: _float_or_none(data, 'DewPoint'),
     ),
     DavisSensorEntityDescription(
         key="BarTrend",
@@ -523,7 +567,9 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
             if is_dash_value or value == 0 or value == "N":
                 # If the wind is calm, check if we have a saved previous direction
                 if getattr(self, "_attr_native_value", None) is not None:
-                    return self._attr_native_value
+                    # Previously stored values here are always float/int/str
+                    # (see below) - narrow SensorEntity's broader StateType.
+                    return cast("float | int | str", self._attr_native_value)
                 # If fresh boot and no history, return None (Unknown) to keep graphs clean
                 value = None
 

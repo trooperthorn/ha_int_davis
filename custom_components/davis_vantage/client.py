@@ -130,7 +130,7 @@ class LoopData2Parser(LoopDataParserRevB):
 class DavisVantageClient:
     """Davis Vantage Client class"""
 
-    _vantagepro2 = None  # type: ignore
+    _vantagepro2: VantagePro2 | None = None
     _latitude: float = 0.0
     _longitude: float = 0.0
     _elevation: int = 0
@@ -181,7 +181,7 @@ class DavisVantageClient:
 
         return self._vantagepro2.link
 
-    def get_vantagepro2fromurl(self, url: str):
+    def get_vantagepro2fromurl(self, url: str) -> VantagePro2:
         try:
             vp = VantagePro2.from_url(url)
             if not self._persistent_connection:
@@ -305,6 +305,7 @@ class DavisVantageClient:
         (mirroring VantagePro2.get_current_data()'s own wake_up/send/read
         pattern) and parses the response with LoopData2Parser.
         """
+        assert self._vantagepro2 is not None  # only called from get_current_data(), after it connects
         self._vantagepro2.wake_up()
         self._vantagepro2.send("LPS 2 1", self._vantagepro2.ACK)
         raw_data = self._vantagepro2.link.read(99, binary=True)
@@ -489,6 +490,7 @@ class DavisVantageClient:
     # -----------------------------
 
     def add_additional_info(self, data: dict[str, Any]) -> None:
+        assert self._vantagepro2 is not None  # only called from async_get_current_data(), after get_current_data() connects
         # LOOP2 packets already carry console-computed DewPoint, HeatIndex,
         # and WindChill (LoopData2Parser) - prefer those over the client-side
         # formulas below rather than clobbering real values with estimates.
@@ -721,9 +723,11 @@ class DavisVantageClient:
             0x10: RAIN_COLLECTOR_METRIC,
             0x20: RAIN_COLLECTOR_METRIC_0_1,
         }
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         self._vantagepro2.wake_up()
-        rain_collector = self._vantagepro2.get_rain_collector() 
-        return rain_collector_map.get(rain_collector, "") 
+        rain_collector = self._vantagepro2.get_rain_collector()
+        return rain_collector_map.get(rain_collector, "")
 
     async def async_get_rain_collector(self) -> str:
         info = ""
@@ -740,6 +744,8 @@ class DavisVantageClient:
             RAIN_COLLECTOR_METRIC: 0x10,
             RAIN_COLLECTOR_METRIC_0_1: 0x20,
         }
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         self._vantagepro2.set_rain_collector(
             rain_collector_map.get(rain_collector, 0x00)
         )
@@ -755,7 +761,9 @@ class DavisVantageClient:
 
     def get_latitude_longitude_elevation(self) -> tuple[float, float, int]:
         latitude = longitude = None
-        data = self._vantagepro2.read_from_eeprom("0B", 6) 
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        data = self._vantagepro2.read_from_eeprom("0B", 6)
         latitude, longitude, elevation = struct.unpack(b"hhh", data) 
         latitude /= 10
         longitude /= 10
@@ -774,6 +782,8 @@ class DavisVantageClient:
 
     def get_davis_time(self) -> datetime | None:
         data = None
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
             data = self._vantagepro2.gettime()
@@ -794,6 +804,8 @@ class DavisVantageClient:
         return data
 
     def set_davis_time(self, dtime: datetime) -> None:
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
             self._vantagepro2.settime(dtime)
@@ -811,11 +823,13 @@ class DavisVantageClient:
             _LOGGER.error("Couldn't set davis time: %s", e)
 
     def get_info(self) -> dict[str, Any] | None:
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
-            firmware_version = self._vantagepro2.firmware_version 
-            firmware_date = self._vantagepro2.firmware_date 
-            diagnostics = self._vantagepro2.diagnostics 
+            firmware_version = self._vantagepro2.firmware_version
+            firmware_date = self._vantagepro2.firmware_date
+            diagnostics = self._vantagepro2.diagnostics
         except Exception as e:
             raise e
         finally:
@@ -837,10 +851,12 @@ class DavisVantageClient:
         return info
 
     def get_static_info(self) -> dict[str, Any] | None:
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
-            firmware_version = self._vantagepro2.firmware_version 
-            archive_period = self._vantagepro2.archive_period 
+            firmware_version = self._vantagepro2.firmware_version
+            archive_period = self._vantagepro2.archive_period
         except Exception as e:
             raise e
         finally:
@@ -858,6 +874,8 @@ class DavisVantageClient:
         return info
 
     def set_yearly_rain(self, rain_clicks: int) -> None:
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
             self._vantagepro2.set_yearly_rain(rain_clicks)
@@ -875,6 +893,8 @@ class DavisVantageClient:
             _LOGGER.error("Couldn't set yearly rain: %s", e)
 
     def set_archive_period(self, archive_period: int) -> None:
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
         try:
             self._vantagepro2.link.open()
             self._vantagepro2.set_archive_period(archive_period)
