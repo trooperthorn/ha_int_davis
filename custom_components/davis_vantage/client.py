@@ -32,6 +32,7 @@ from .const import (
     RAIN_COLLECTOR_METRIC,
     RAIN_COLLECTOR_METRIC_0_1,
     PROTOCOL_NETWORK,
+    DEFAULT_BAUD_RATE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,12 +48,13 @@ class DavisVantageClient:
     _last_readout_duration: float = 0
     
     def __init__(
-        self, 
-        hass, 
-        protocol: str, 
-        link: str, 
+        self,
+        hass,
+        protocol: str,
+        link: str,
         persistent_connection: bool,
-        use_loop2: bool = False 
+        use_loop2: bool = False,
+        baud_rate: int = DEFAULT_BAUD_RATE,
     ) -> None:
         self._hass = hass
         self._protocol = protocol
@@ -63,6 +65,7 @@ class DavisVantageClient:
         self._last_raw_hilows = {}  # type: ignore
         self._persistent_connection = persistent_connection
         self._use_loop2 = use_loop2  # CRITICAL FIX: Uncommented
+        self._baud_rate = baud_rate or DEFAULT_BAUD_RATE
 
     @property
     def latitude(self) -> float:
@@ -189,15 +192,18 @@ class DavisVantageClient:
             _LOGGER.debug("Skipping archive sync (non-fatal serial/encoding hiccup): %s", e)
             archives = None
             
-        try:
-            _LOGGER.debug("Start get_rain_collector")
-            self._rain_collector = self.get_rain_collector()
-            _LOGGER.debug("End get_rain_collector")
-        except Exception as e:
-            _LOGGER.error("Couldn't get rain_collector: %s", e)
-        finally:
-            if not self._persistent_connection:
-                self._vantagepro2.link.close()
+        # The rain collector type rarely changes and reading it costs an extra
+        # wake-up + serial round trip. Fetch it once and reuse the cached value
+        # on subsequent polls to keep per-poll latency down.
+        if not self._rain_collector:
+            try:
+                _LOGGER.debug("Start get_rain_collector")
+                self._rain_collector = self.get_rain_collector()
+                _LOGGER.debug("End get_rain_collector")
+            except Exception as e:
+                _LOGGER.error("Couldn't get rain_collector: %s", e)
+        if not self._persistent_connection:
+            self._vantagepro2.link.close()
 
         self._last_readout_duration = (datetime.now() - start_readout).total_seconds()
 
@@ -343,7 +349,14 @@ class DavisVantageClient:
         # ---------------------------------------------
         
         # --- HARDWARE DIAGNOSTICS & ALARMS EXTRACTION ---
-        if "_raw_bytes" in self._last_raw_data and len(self._last_raw_data["_raw_bytes"]) >= 99:
+        # These byte offsets are only valid for LOOP1 packets. The LOOP2 packet
+        # layout is different and undocumented in our reference manual, so skip
+        # this extraction when LOOP2 is active to avoid reporting wrong data.
+        if (
+            not self._use_loop2
+            and "_raw_bytes" in self._last_raw_data
+            and len(self._last_raw_data["_raw_bytes"]) >= 99
+        ):
             raw = self._last_raw_data["_raw_bytes"]
             
             # Byte 86: Transmitter Battery Status
@@ -471,7 +484,7 @@ class DavisVantageClient:
     def get_link(self) -> str:
         if self._protocol == PROTOCOL_NETWORK:
             return f"tcp:{self._link}"
-        return f"serial:{self._link}:19200:8N1"
+        return f"serial:{self._link}:{self._baud_rate}:8N1"
 
     def get_raw_data(self):
         return self._last_raw_data
@@ -522,6 +535,8 @@ class DavisVantageClient:
         self._vantagepro2.set_rain_collector(
             rain_collector_map.get(rain_collector, 0x00)
         )
+        # Invalidate the cache so the next poll re-reads the new setting.
+        self._rain_collector = ""
 
     async def async_set_rain_collector(self, rain_collector: str):
         try:

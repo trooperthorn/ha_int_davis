@@ -21,6 +21,8 @@ from .const import (
     CONFIG_PROTOCOL,
     CONFIG_LINK,
     CONFIG_PERSISTENT_CONNECTION,
+    CONFIG_BAUD_RATE,
+    DEFAULT_BAUD_RATE,
 )
 from .coordinator import DavisVantageDataUpdateCoordinator
 from .services import DavisServicesSetup
@@ -62,17 +64,23 @@ async def async_setup_entry(
 
     # 2. Client instantiation
     # Handles both signature variations (with or without use_loop2 parameter)
+    baud_rate = config_entry.options.get(
+        CONFIG_BAUD_RATE,
+        config_entry.data.get(CONFIG_BAUD_RATE, DEFAULT_BAUD_RATE),
+    )
+
     try:
         use_loop2 = config_entry.options.get(
-            "use_loop2", 
+            "use_loop2",
             config_entry.data.get("use_loop2", False)
         )
         client = DavisVantageClient(
-            hass, 
-            protocol, 
-            link, 
-            persistent_connection, 
-            use_loop2=use_loop2
+            hass,
+            protocol,
+            link,
+            persistent_connection,
+            use_loop2=use_loop2,
+            baud_rate=baud_rate,
         )
     except TypeError:
         # Fallback if custom DavisVantageClient does not accept use_loop2 in __init__

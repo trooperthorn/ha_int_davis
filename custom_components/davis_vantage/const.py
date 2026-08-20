@@ -33,3 +33,8 @@ CONFIG_PROTOCOL = "protocol"
 CONFIG_LINK = "link"
 CONFIG_PERSISTENT_CONNECTION = "persistent_connection"
 CONF_USE_LOOP2 = "use_loop2"
+
+CONFIG_BAUD_RATE = "baud_rate"
+DEFAULT_BAUD_RATE = 19200
+# Valid console baud rates, fastest first, per the Davis serial protocol.
+SUPPORTED_BAUD_RATES = [19200, 14400, 9600, 4800, 2400, 1200]
