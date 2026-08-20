@@ -1,5 +1,7 @@
 pytest>=8.0.0
+pytest-asyncio
+pytest-homeassistant-custom-component
 mypy>=1.10.0
 homeassistant
 pyserial
-pyvantagepro @ git+https://github.com/trooperthorn/PyVantagePro.git@main
+pyvantagepro @ git+https://github.com/trooperthorn/PyVantagePro.git@master
