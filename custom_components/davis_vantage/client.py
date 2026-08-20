@@ -421,6 +421,71 @@ class DavisVantageClient:
     async def async_get_rxcheck(self):
         """Retrieve detailed connectivity diagnostics."""
         return await self._async_send_console_command("RXCHECK\n")
+
+    async def async_get_nver(self) -> str:
+        """Get the firmware version string (Vantage Pro2/Vue only)."""
+        return await self._async_send_console_command("NVER\n")
+
+    async def async_get_bardata(self) -> str:
+        """Get the current barometer calibration parameters as text."""
+        return await self._async_send_console_command("BARDATA\n")
+
+    async def async_set_barometer_calibration(
+        self, elevation_ft: int, bar_inhg: float = 0.0
+    ) -> str:
+        """Set the barometer/elevation offset (BAR= command, manual sec. VIII.5).
+
+        `bar_inhg`: a known-good local barometer reading (20.000-32.500 inHg)
+        to fine-tune the console's own adjusted-pressure calculation, or 0 to
+        clear any existing offset. `elevation_ft`: station elevation
+        (-2000 to 15000 ft) - the primary correction, always required.
+        """
+        bar_value = 0 if bar_inhg == 0 else round(bar_inhg * 1000)
+        cmd = f"BAR={bar_value} {elevation_ft}\n"
+        return await self._async_send_console_command(cmd)
+
+    def get_eeprom(self, address_hex: str, size: int) -> bytes:
+        """Read `size` bytes from EEPROM starting at `address_hex` (manual sec. XIII)."""
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        self._vantagepro2.link.open()
+        try:
+            self._vantagepro2.wake_up()
+            return self._vantagepro2.read_from_eeprom(address_hex, size)
+        finally:
+            if not self._persistent_connection:
+                self._vantagepro2.link.close()
+
+    async def async_get_eeprom(self, address_hex: str, size: int) -> str:
+        """Read EEPROM bytes and return them as a hex string."""
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, self.get_eeprom, address_hex, size)
+        return data.hex()
+
+    def set_eeprom(self, address_hex: str, data: bytes) -> None:
+        """Write `data` to EEPROM starting at `address_hex` (manual sec. XIII).
+
+        Advanced/expert use only: several EEPROM locations are factory
+        calibration values that should never be written (see the manual's
+        EEPROM address table), and writing the wrong bytes to the wrong
+        address can corrupt console settings. There is no hardware
+        protection against this - the console will accept whatever is sent.
+        """
+        if not self._vantagepro2:
+            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        self._vantagepro2.link.open()
+        try:
+            self._vantagepro2.wake_up()
+            self._vantagepro2.write_to_eeprom(address_hex, len(data), data)
+        finally:
+            if not self._persistent_connection:
+                self._vantagepro2.link.close()
+
+    async def async_set_eeprom(self, address_hex: str, data_hex: str) -> None:
+        """Write a hex string of bytes to EEPROM starting at `address_hex`."""
+        data = bytes.fromhex(data_hex)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.set_eeprom, address_hex, data)
     # -----------------------------
 
     def add_additional_info(self, data: dict[str, Any]) -> None:

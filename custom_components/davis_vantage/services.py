@@ -17,6 +17,11 @@ from .const import (
     SERVICE_SET_YEARLY_RAIN,
     SERVICE_SET_ARCHIVE_PERIOD,
     SERVICE_SET_RAIN_COLLECTOR,
+    SERVICE_SET_BAROMETER_CALIBRATION,
+    SERVICE_GET_EEPROM,
+    SERVICE_SET_EEPROM,
+    SERVICE_SET_CONSOLE_LAMPS,
+    SERVICE_CLEAR_ALARMS,
     SERVICE_GET_INFO,
     RAIN_COLLECTOR_IMPERIAL,
     RAIN_COLLECTOR_METRIC,
@@ -50,6 +55,39 @@ SET_RAIN_COLLECTOR_SERVICE_SCHEMA = vol.Schema(
         )
     }
 )
+
+SET_BAROMETER_CALIBRATION_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("elevation"): vol.All(int, vol.Range(min=-2000, max=15000)),
+        vol.Optional("barometer", default=0.0): vol.All(
+            vol.Coerce(float), vol.Any(0, vol.Range(min=20.0, max=32.5))
+        ),
+    }
+)
+
+HEX_ADDRESS = vol.Match(r"^[0-9A-Fa-f]{1,3}$")
+HEX_BYTES = vol.Match(r"^([0-9A-Fa-f]{2})+$")
+
+SET_CONSOLE_LAMPS_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("state"): bool,
+    }
+)
+
+GET_EEPROM_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("address"): HEX_ADDRESS,
+        vol.Required("size"): vol.All(int, vol.Range(min=1, max=256)),
+    }
+)
+
+SET_EEPROM_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("address"): HEX_ADDRESS,
+        vol.Required("data"): HEX_BYTES,
+    }
+)
+
 
 class DavisServicesSetup:
     """Class to handle Integration Services."""
@@ -113,6 +151,41 @@ class DavisServicesSetup:
             schema=SET_RAIN_COLLECTOR_SERVICE_SCHEMA,
         )
 
+        self.hass.services.register(
+            DOMAIN,
+            SERVICE_SET_BAROMETER_CALIBRATION,
+            self.set_barometer_calibration,
+            schema=SET_BAROMETER_CALIBRATION_SERVICE_SCHEMA,
+        )
+
+        self.hass.services.register(
+            DOMAIN,
+            SERVICE_GET_EEPROM,
+            self.get_eeprom,
+            schema=GET_EEPROM_SERVICE_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+
+        self.hass.services.register(
+            DOMAIN,
+            SERVICE_SET_EEPROM,
+            self.set_eeprom,
+            schema=SET_EEPROM_SERVICE_SCHEMA,
+        )
+
+        self.hass.services.register(
+            DOMAIN,
+            SERVICE_SET_CONSOLE_LAMPS,
+            self.set_console_lamps,
+            schema=SET_CONSOLE_LAMPS_SERVICE_SCHEMA,
+        )
+
+        self.hass.services.register(
+            DOMAIN,
+            SERVICE_CLEAR_ALARMS,
+            self.clear_alarms,
+        )
+
     async def set_davis_time(self, _: ServiceCall) -> None:
         """Set Davis Time service"""
         client = self.config_entry.runtime_data.coordinator.client
@@ -171,3 +244,33 @@ class DavisServicesSetup:
         """Set Rain Collector service"""
         client = self.config_entry.runtime_data.coordinator.client
         await client.async_set_rain_collector(call.data["rain_collector"])
+
+    async def set_barometer_calibration(self, call: ServiceCall) -> None:
+        """Set Barometer Calibration service"""
+        client = self.config_entry.runtime_data.coordinator.client
+        await client.async_set_barometer_calibration(
+            call.data["elevation"], call.data.get("barometer", 0.0)
+        )
+
+    async def get_eeprom(self, call: ServiceCall) -> dict[str, Any]:
+        """Get EEPROM service (advanced/diagnostic use)"""
+        client = self.config_entry.runtime_data.coordinator.client
+        data = await client.async_get_eeprom(call.data["address"], call.data["size"])
+        return {"data": data}
+
+    async def set_eeprom(self, call: ServiceCall) -> None:
+        """Set EEPROM service (advanced use - see the manual's EEPROM address
+        table before writing; some locations are factory calibration values
+        that should never be written)."""
+        client = self.config_entry.runtime_data.coordinator.client
+        await client.async_set_eeprom(call.data["address"], call.data["data"])
+
+    async def set_console_lamps(self, call: ServiceCall) -> None:
+        """Set Console Lamps service"""
+        client = self.config_entry.runtime_data.coordinator.client
+        await client.async_set_console_lamps(call.data["state"])
+
+    async def clear_alarms(self, _: ServiceCall) -> None:
+        """Clear Active Alarms service"""
+        client = self.config_entry.runtime_data.coordinator.client
+        await client.async_clear_alarms()
