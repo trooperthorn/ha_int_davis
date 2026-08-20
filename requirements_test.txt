@@ -1,0 +1,4 @@
+pytest>=8.0.0
+homeassistant
+pyserial
+pyvantagepro @ git+https://github.com/trooperthorn/PyVantagePro.git@main
