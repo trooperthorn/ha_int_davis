@@ -199,13 +199,27 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
   #      entity_category=EntityCategory.Climate, # Hides it from the main dashboard & Voice assistants
     ),
     DavisSensorEntityDescription(
+        # NOTE: "WindSpeed10Min" is the 10-minute *average* wind speed, not a
+        # gust (Davis manual, LOOP data format). The key is kept as-is so
+        # existing entity_ids/history aren't broken by the rename.
         key="wind_speed_10_min_gust",
-        name="Wind Gust (10 min)",
+        name="Wind Speed (10 min Avg)",
         icon="mdi:weather-windy",
         device_class=SensorDeviceClass.WIND_SPEED,
         native_unit_of_measurement=UnitOfSpeed.MILES_PER_HOUR,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda data: data['WindSpeed10Min'], # Use the exact PyVantagePro key here
+    ),
+    DavisSensorEntityDescription(
+        key="wind_gust",
+        name="Wind Gust",
+        icon="mdi:weather-windy-variant",
+        device_class=SensorDeviceClass.WIND_SPEED,
+        native_unit_of_measurement=UnitOfSpeed.MILES_PER_HOUR,
+        state_class=SensorStateClass.MEASUREMENT,
+        # True gust: the high wind speed from the last archive interval
+        # (client.py's add_archive_info), not the 10-min average.
+        value_fn=lambda data: data.get('WindGust'),
     ),
    DavisSensorEntityDescription(
         key="wind_direction",
@@ -279,6 +293,17 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda data: data['RainYear'], # Use the exact PyVantagePro key here
  #       entity_category=EntityCategory.Rain, # Hides it from the main dashboard & Voice assistants
+    ),
+    DavisSensorEntityDescription(
+        # Evapotranspiration - useful for irrigation-controller integrations
+        # (e.g. rain-delay/watering-need logic) that expect this alongside rainfall.
+        key="et_day",
+        name="Evapotranspiration Today",
+        icon="mdi:sprout-outline",
+        native_unit_of_measurement=UnitOfLength.INCHES,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data.get('ETDay'),
     ),
 
     # --- SOLAR & UV ---
