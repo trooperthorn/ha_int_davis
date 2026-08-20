@@ -11,16 +11,19 @@ from homeassistant.helpers import selector
 
 from .client import DavisVantageClient
 from .const import (
+    CONFIG_BAUD_RATE,
     CONFIG_INTERVAL,
     CONFIG_LINK,
     CONFIG_MINIMAL_INTERVAL,
     CONFIG_PERSISTENT_CONNECTION,
     CONFIG_PROTOCOL,
+    DEFAULT_BAUD_RATE,
     DEFAULT_SYNC_INTERVAL,
     DOMAIN,
     NAME,
     PROTOCOL_NETWORK,
     PROTOCOL_SERIAL,
+    SUPPORTED_BAUD_RATES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -102,42 +105,55 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self.link = user_input[CONFIG_LINK]
 
-            # --- FAST PROBE FOR INSTANT FEEDBACK & LOOP 2 DISCOVERY ---
-            def fast_probe_davis(port: str) -> tuple[bool, bool]:
+            # --- FAST PROBE FOR INSTANT FEEDBACK, BAUD NEGOTIATION & LOOP 2 DISCOVERY ---
+            def wake_console(ser) -> bool:
+                import time
+                ser.write(b"\n")
+                time.sleep(0.1)
+                if ser.read(2) == b"\n\r":
+                    return True
+                # Davis consoles sometimes need a second wake-up call if deeply asleep
+                ser.write(b"\n")
+                time.sleep(0.1)
+                return ser.read(2) == b"\n\r"
+
+            def fast_probe_davis(port: str) -> tuple[bool, bool, int]:
+                """Probe the port, negotiating the console's current baud rate.
+
+                Tries the default (fastest) baud first, then falls back through
+                the other console-supported rates so setup works whether or not
+                the console has previously been reconfigured to a slower rate.
+                """
                 import serial
                 import time
-                try:
-                    # 2-second timeout prevents the 60-second pyvpdriver hang!
-                    with serial.Serial(port, 19200, timeout=2) as ser:
-                        # 1. Wake up the console
-                        ser.write(b"\n")
-                        time.sleep(0.1)
-                        
-                        # Davis consoles sometimes need two wake-up calls if deeply asleep
-                        if ser.read(2) != b"\n\r":
-                            ser.write(b"\n")
+
+                for baud_rate in SUPPORTED_BAUD_RATES:
+                    try:
+                        with serial.Serial(port, baud_rate, timeout=2) as ser:
+                            if not wake_console(ser):
+                                continue
+
+                            # Test LOOP 2 support instantly
+                            ser.write(b"LPS 2 1\n")
                             time.sleep(0.1)
-                            if ser.read(2) != b"\n\r":
-                                return False, False # BAD ACK - Not a Davis device
-                        
-                        # 2. Test LOOP 2 support instantly
-                        ser.write(b"LPS 2 1\n")
-                        time.sleep(0.1)
-                        ack = ser.read(1)
-                        loop2_supported = (ack == b"\x06")
-                        
-                        return True, loop2_supported
-                except Exception:
-                    return False, False
+                            ack = ser.read(1)
+                            loop2_supported = ack == b"\x06"
+
+                            return True, loop2_supported, baud_rate
+                    except Exception:
+                        continue
+
+                return False, False, DEFAULT_BAUD_RATE
 
             # Run the fast probe without blocking Home Assistant
-            success, loop2_supported = await self.hass.async_add_executor_job(
+            success, loop2_supported, baud_rate = await self.hass.async_add_executor_job(
                 fast_probe_davis, self.link
             )
 
             if success:
-                # Save the discovered LOOP 2 capability to the class instance
+                # Save the discovered capabilities to the class instance
                 self.loop2_supported = loop2_supported
+                self.baud_rate = baud_rate
                 return await self.async_step_setup_other_info()
             else:
                 # Instantly throw the specific error!
@@ -173,11 +189,12 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle additional settings after successful connection."""
         if user_input is not None:
             user_input[CONFIG_LINK] = getattr(self, "link", "")
-            user_input[CONFIG_PROTOCOL] = "Serial" 
+            user_input[CONFIG_PROTOCOL] = "Serial"
+            user_input[CONFIG_BAUD_RATE] = getattr(self, "baud_rate", DEFAULT_BAUD_RATE)
             return self.async_create_entry(title="Davis Vantage", data=user_input)
 
         auto_loop2 = getattr(self, "loop2_supported", False)
-        
+
         step_user_data_schema = vol.Schema(
             {
                 # Set minimum to 30 seconds and maximum to 300 seconds
