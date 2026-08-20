@@ -189,6 +189,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="forecast_icon_raw",
+        translation_key="forecast_icon_raw",
         name="Forecast Icon Raw",
         icon="mdi:eye-check-outline",
         # Set to False to disable this sensor by default
@@ -200,6 +201,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     # --- TEMPERATURE & HUMIDITY ---
     DavisSensorEntityDescription(
         key="TempOut",
+        translation_key="temperature",
         name="Outside Temperature",
         icon="mdi:thermometer",
         device_class=SensorDeviceClass.TEMPERATURE,
@@ -209,6 +211,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="inside_temperature",
+        translation_key="temperature_inside",
         name="Inside Temperature",
         icon="mdi:thermometer",
         device_class=SensorDeviceClass.TEMPERATURE,
@@ -219,6 +222,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="HumOut",
+        translation_key="humidity",
         name="Outside Humidity",
         icon="mdi:water-percent",
         device_class=SensorDeviceClass.HUMIDITY,
@@ -228,6 +232,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="inside_humidity",
+        translation_key="humidity_inside",
         name="Inside Humidity",
         icon="mdi:water-percent",
         device_class=SensorDeviceClass.HUMIDITY,
@@ -240,6 +245,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     # --- WIND & PRESSURE ---
     DavisSensorEntityDescription(
         key="WindSpeed",
+        translation_key="wind_speed",
         name="Wind Speed",
         icon="mdi:weather-windy",
         device_class=SensorDeviceClass.WIND_SPEED,
@@ -253,6 +259,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         # gust (Davis manual, LOOP data format). The key is kept as-is so
         # existing entity_ids/history aren't broken by the rename.
         key="wind_speed_10_min_gust",
+        translation_key="wind_speed_average_10min",
         name="Wind Speed (10 min Avg)",
         icon="mdi:weather-windy",
         device_class=SensorDeviceClass.WIND_SPEED,
@@ -262,6 +269,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="wind_gust",
+        translation_key="wind_gust",
         name="Wind Gust",
         icon="mdi:weather-windy-variant",
         device_class=SensorDeviceClass.WIND_SPEED,
@@ -273,6 +281,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
    DavisSensorEntityDescription(
         key="wind_direction",
+        translation_key="wind_direction",
         name="Wind Direction",
         icon="mdi:compass-outline",
         native_unit_of_measurement="°",
@@ -281,6 +290,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="wind_direction_rose",
+        translation_key="wind_direction_rose",
         name="Wind Direction (Rose)",
         icon="mdi:compass",
         # Notice we don't use a unit_of_measurement or state_class
@@ -291,6 +301,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         # Only populated in LOOP2 mode (add_loop2_wind_info in client.py) -
         # the direction of the last 10-minute gust, not an average direction.
         key="wind_gust_direction",
+        translation_key="wind_gust_direction",
         name="Wind Gust Direction",
         icon="mdi:compass-outline",
         native_unit_of_measurement="°",
@@ -300,6 +311,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="barometer",
+        translation_key="barometric_pressure",
         name="Barometric Pressure",
         icon="mdi:gauge",
         device_class=SensorDeviceClass.ATMOSPHERIC_PRESSURE,
@@ -311,6 +323,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     # --- PRECIPITATION (RATES & CUMULATIVE) ---
     DavisSensorEntityDescription(
         key="rain_rate",
+        translation_key="rain_rate",
         name="Rain Rate",
         icon="mdi:weather-pouring",
         device_class=SensorDeviceClass.PRECIPITATION_INTENSITY,
@@ -346,6 +359,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="rain_day",
+        translation_key="rain_day",
         name="Rain Today",
         icon="mdi:water",
         device_class=SensorDeviceClass.PRECIPITATION,
@@ -356,6 +370,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="rain_month",
+        translation_key="rain_month",
         name="Rain Month",
         icon="mdi:water",
         device_class=SensorDeviceClass.PRECIPITATION,
@@ -366,6 +381,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="rain_year",
+        translation_key="rain_year",
         name="Rain Year",
         icon="mdi:water",
         device_class=SensorDeviceClass.PRECIPITATION,
@@ -378,6 +394,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         # Evapotranspiration - useful for irrigation-controller integrations
         # (e.g. rain-delay/watering-need logic) that expect this alongside rainfall.
         key="et_day",
+        translation_key="et_day",
         name="Evapotranspiration Today",
         icon="mdi:sprout-outline",
         native_unit_of_measurement=UnitOfLength.INCHES,
@@ -389,6 +406,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     # --- SOLAR & UV ---
     DavisSensorEntityDescription(
         key="solar_radiation",
+        translation_key="solar_radiation",
         name="Solar Radiation",
         icon="mdi:solar-power",
         device_class=SensorDeviceClass.IRRADIANCE,
@@ -399,6 +417,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="uv_index",
+        translation_key="uv_level",
         name="UV Index",
         icon="mdi:weather-sunny-alert",
         # HA does not currently enforce a UV device class natively, so we just use MEASUREMENT
@@ -408,6 +427,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="HeatIndex",
+        translation_key="heat_index",
         name="Heat Index",
         icon="mdi:thermometer",
         device_class=SensorDeviceClass.TEMPERATURE,
@@ -417,6 +437,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="WindChill",
+        translation_key="wind_chill",
         name="Wind Chill",
         icon="mdi:snowflake-thermometer",
         device_class=SensorDeviceClass.TEMPERATURE,
@@ -426,6 +447,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="FeelsLike",
+        translation_key="feels_like",
         name="Feels Like",
         icon="mdi:download-circle-outline",
         device_class=SensorDeviceClass.TEMPERATURE,
@@ -437,6 +459,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         # THSW (Temp-Humidity-Sun-Wind) index: Davis's own apparent-temperature
         # figure, only available in LOOP2 mode - see LoopData2Parser.
         key="THSWIndex",
+        translation_key="thsw_index",
         name="THSW Index",
         icon="mdi:sun-thermometer-outline",
         device_class=SensorDeviceClass.TEMPERATURE,
@@ -447,6 +470,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     ),
     DavisSensorEntityDescription(
         key="DewPoint",
+        translation_key="dew_point",
         name="Dew Point",
         icon="mdi:water-thermometer-outline",
         device_class=SensorDeviceClass.TEMPERATURE,
@@ -472,6 +496,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     # --- DIAGNOSTICS & SYSTEM STATUS ---
     DavisSensorEntityDescription(
         key="console_battery",
+        translation_key="battery_voltage",
         name="Console Battery",
         icon="mdi:battery",
         device_class=SensorDeviceClass.VOLTAGE,
@@ -506,6 +531,9 @@ async def async_setup_entry(
 class DavisVantageSensor(CoordinatorEntity, SensorEntity):
     """Representation of a Davis Vantage Sensor."""
 
+    # Tells Home Assistant to use the device name + translation_key/name,
+    # matching the pattern already used in binary_sensor.py.
+    _attr_has_entity_name = True
     entity_description: DavisSensorEntityDescription
 
     # --- UPDATE THIS INIT FUNCTION ---

@@ -473,8 +473,23 @@
             "rain_storm": {
                 "name": "Rain Storm"
             },
+            "rain_15_min": {
+                "name": "Rain (15 Min)"
+            },
             "rain_storm_start_date": {
                 "name": "Rain Storm Start Date"
+            },
+            "wind_gust_direction": {
+                "name": "Wind Gust Direction"
+            },
+            "et_day": {
+                "name": "Evapotranspiration Today"
+            },
+            "thsw_index": {
+                "name": "THSW Index"
+            },
+            "forecast_icon_raw": {
+                "name": "Forecast Icon Raw"
             },
             "extra_temperature_1": {
                 "name": "Extra Temperature 1"
