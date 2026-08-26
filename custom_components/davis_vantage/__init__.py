@@ -3,7 +3,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import logging
-import inspect
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -122,11 +121,10 @@ async def async_setup_entry(
         await coordinator.async_config_entry_first_refresh()
     except Exception as err:
         _LOGGER.warning("Initial refresh failed for Davis Vantage (%s). Retrying...", err)
-        # Ensure connection is closed before failing setup to release the port
-        if hasattr(client, "close"):
-            await client.close()
-        elif hasattr(client, "disconnect"):
-            await client.disconnect()
+        # Ensure the connection is closed before failing setup, so HA's
+        # automatic retry of ConfigEntryNotReady doesn't hit "Resource busy"
+        # trying to reopen a port this entry never released.
+        await client.async_close()
         raise ConfigEntryNotReady(f"Initial data fetch failed: {err}") from err
 
     # 6. Store references
@@ -142,10 +140,9 @@ async def async_setup_entry(
     )
 
     # 9. Register Services / Actions
-    if inspect.iscoroutinefunction(DavisServicesSetup):
-        await DavisServicesSetup(hass, config_entry)
-    elif callable(DavisServicesSetup):
-        await hass.async_add_executor_job(DavisServicesSetup, hass, config_entry)
+    # DavisServicesSetup.__init__ calls hass.services.register() (the
+    # thread-safe sync variant, per services.py) - run it off the event loop.
+    await hass.async_add_executor_job(DavisServicesSetup, hass, config_entry)
 
     return True
 
@@ -160,19 +157,11 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry
         coordinator = config_entry.runtime_data.coordinator
         client = coordinator.client
 
-        # Release the serial/TCP connection to prevent 'Resource busy' errors on reload
+        # Release the serial/TCP connection to prevent 'Resource busy' errors on reload.
+        # async_close() only touches the connection if one was actually opened -
+        # it never triggers the `link` property's lazy-connect behavior.
         try:
-            if hasattr(client, "close") and inspect.iscoroutinefunction(client.close):
-                await client.close()
-            elif hasattr(client, "close"):
-                await hass.async_add_executor_job(client.close)
-            elif hasattr(client, "disconnect") and inspect.iscoroutinefunction(client.disconnect):
-                await client.disconnect()
-            elif hasattr(client, "disconnect"):
-                await hass.async_add_executor_job(client.disconnect)
-            elif hasattr(client, "link") and hasattr(client.link, "close"):
-                # client.link.close() does blocking serial I/O - keep it off the event loop.
-                await hass.async_add_executor_job(client.link.close)
+            await client.async_close()
         except Exception as err:
             _LOGGER.error("Error closing Davis station connection during unload: %s", err)
 

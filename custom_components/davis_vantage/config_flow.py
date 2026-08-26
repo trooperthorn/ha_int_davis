@@ -205,14 +205,26 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle network connection details."""
+        errors: dict[str, str] = {}
+
         if user_input is not None:
             self.link = user_input[CONFIG_LINK]
-            return await self.async_step_setup_other_info()
+            try:
+                await validate_input(
+                    self.hass, {CONFIG_PROTOCOL: self.protocol, CONFIG_LINK: self.link}
+                )
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected exception validating network connection")
+                errors["base"] = "unknown"
+            else:
+                return await self.async_step_setup_other_info()
 
         step_user_data_schema = vol.Schema({vol.Required(CONFIG_LINK): str})
 
         return self.async_show_form(
-            step_id="setup_network", data_schema=step_user_data_schema
+            step_id="setup_network", data_schema=step_user_data_schema, errors=errors
         )
 
     async def async_step_setup_other_info(
@@ -221,7 +233,7 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle additional settings after successful connection."""
         if user_input is not None:
             user_input[CONFIG_LINK] = getattr(self, "link", "")
-            user_input[CONFIG_PROTOCOL] = "Serial"
+            user_input[CONFIG_PROTOCOL] = getattr(self, "protocol", PROTOCOL_SERIAL)
             user_input[CONFIG_BAUD_RATE] = getattr(self, "baud_rate", DEFAULT_BAUD_RATE)
             return self.async_create_entry(title="Davis Vantage", data=user_input)
 

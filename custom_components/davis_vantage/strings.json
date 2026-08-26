@@ -11,46 +11,55 @@
         "title": "Davis Vantage Connection",
         "description": "Select how Home Assistant connects to your Davis Vantage console or WeatherLink logger.",
         "data": {
-          "connection_type": "Connection Type"
+          "protocol": "Protocol"
         }
       },
-      "serial": {
+      "setup_serial": {
         "title": "Serial / USB Configuration",
         "description": "Select the serial port connected to your Davis WeatherLink data logger.",
         "data": {
-          "port": "Serial Port",
-          "baudrate": "Baud Rate"
+          "link": "Device"
         }
       },
-      "network": {
+      "setup_network": {
         "title": "Network Configuration",
         "description": "Enter the IP address and port for your WeatherLinkIP or network logger.",
         "data": {
-          "host": "Host / IP Address",
-          "port": "Port"
+          "link": "Host"
         }
       },
       "setup_other_info": {
         "title": "Advanced Settings",
         "description": "Configure polling behavior and protocol settings.",
         "data": {
+          "interval": "Interval",
           "use_loop2": "Enable LOOP2 Protocol",
-          "interval": "Polling Interval (seconds)"
+          "persistent_connection": "Persistent Connection"
         },
         "data_description": {
           "use_loop2": "Requests expanded LOOP2 data packets (LPS 2 1). Requires Vantage Pro2 or Vantage Vue console firmware v1.90 or newer. Leave disabled if you have older firmware or experience communication timeouts.",
           "interval": "Time between console read cycles. Default is 300 seconds (5 min). Serial connections should not be polled faster than every 10–15 seconds to prevent bus contention."
         }
+      },
+      "reconfigure_confirm": {
+        "description": "Update configuration for {name}.",
+        "data": {
+          "link": "Host",
+          "interval": "Interval"
+        }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to the weather station. Please verify the port or network address.",
+      "invalid_auth": "Looks like the weather station isn't reacting, try again",
       "no_davis_device": "No Davis console responded. Check serial cable seating and verify the console is powered.",
       "unsupported_loop2": "The console rejected the LOOP2 command (LPS 2 1). Verify your firmware is version 1.90+ or disable LOOP2.",
-      "timeout": "Console took too long to wake up or send an ACK byte."
+      "timeout": "Console took too long to wake up or send an ACK byte.",
+      "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "This Davis Vantage device is already configured."
+      "already_configured": "This Davis Vantage device is already configured.",
+      "reconfigure_successful": "Re-configuration was successful"
     }
   },
   "options": {
