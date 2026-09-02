@@ -79,4 +79,3 @@ def test_network_probe_performs_davis_exchange_and_releases_socket():
     assert result.protocol == PROTOCOL_NETWORK
     assert result.endpoint == "weatherlink.local:22222"
     assert result.loop2_supported is False
-

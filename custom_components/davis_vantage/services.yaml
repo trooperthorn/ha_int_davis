@@ -109,4 +109,3 @@ set_console_lamps:
 clear_alarms:
   fields:
     entry_id: *entry_id
-

@@ -313,4 +313,3 @@ def default_verification_result(protocol: str, endpoint: str) -> VerificationRes
         identity_strength=IDENTITY_WEAK,
         loop2_supported=False,
     )
-

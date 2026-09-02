@@ -369,4 +369,3 @@ class DavisVantageOptionsFlowHandler(config_entries.OptionsFlow):
             ),
             errors=errors,
         )
-

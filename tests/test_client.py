@@ -421,4 +421,3 @@ class TestTransportOwnershipDuringCancellation:
         assert diagnostics["reconnect_count"] == 1
         assert diagnostics["failure_streak"] == 0
         assert await client.async_close() is True
-

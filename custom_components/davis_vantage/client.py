@@ -1135,4 +1135,3 @@ class DavisVantageClient:
             datetime.now(), ZoneInfo(self._hass.config.time_zone)
         )
         return now
-

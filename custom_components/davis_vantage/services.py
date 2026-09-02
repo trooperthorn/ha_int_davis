@@ -312,4 +312,3 @@ class DavisServicesSetup:
 def async_setup_services(hass: HomeAssistant) -> None:
     """Register Davis services once for the integration domain."""
     DavisServicesSetup(hass)
-

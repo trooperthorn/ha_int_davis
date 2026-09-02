@@ -127,4 +127,3 @@ class DavisVantageDataUpdateCoordinator(DataUpdateCoordinator):
                     "name": self.config_entry.title if self.config_entry else "Davis Vantage"
                 },
             )
-

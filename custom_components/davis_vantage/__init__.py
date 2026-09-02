@@ -243,4 +243,3 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry
 async def async_reload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry) -> None:
     """Reload config entry when options are updated."""
     await hass.config_entries.async_reload(config_entry.entry_id)
-

@@ -72,4 +72,3 @@ class TestStringsAndTranslationsStayInSync:
             load_translations().get("options", {}).get("step", {}).keys()
         )
         assert strings_options == translations_options
-

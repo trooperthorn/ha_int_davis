@@ -643,4 +643,3 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
         self._attr_native_value = value
         return value
 
-

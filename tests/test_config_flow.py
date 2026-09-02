@@ -327,4 +327,3 @@ async def test_options_flow_owns_all_runtime_tuning_values(hass):
         CONF_USE_LOOP2: True,
         CONFIG_PERSISTENT_CONNECTION: True,
     }
-

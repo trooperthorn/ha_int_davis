@@ -214,4 +214,3 @@ async def test_immediate_reload_waits_for_prior_client_close(hass):
         assert await reload_task is True
         assert client_factory.call_count == 2
         assert await hass.config_entries.async_unload(entry.entry_id)
-

@@ -123,4 +123,3 @@ Before calling a release hardware-qualified, validate LOOP1 and LOOP2 consoles, 
 [^3]: WeatherLinkIP port 22222 is shared with logger activity. This integration releases the TCP connection after each transaction; unusually aggressive polling can still contend with cloud uploads.
 [^4]: Wind direction entities report as `Unknown` if current wind speed is `0.0`.
 [^5]: Mean calculation adjustments for wind direction may require clearing historical long-term statistics in Home Assistant database if migrating from older versions.
-

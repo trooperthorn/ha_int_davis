@@ -220,4 +220,3 @@ class TestMultipleEntryRouting:
 
         with pytest.raises(ValueError, match="entry_id is required"):
             services._entry_for_call(make_call())
-

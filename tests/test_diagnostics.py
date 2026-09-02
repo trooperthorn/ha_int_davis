@@ -94,4 +94,3 @@ class TestAsyncGetConfigEntryDiagnostics:
 
         assert "link" not in result["config_entry"]
 
-

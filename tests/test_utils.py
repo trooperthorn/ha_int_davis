@@ -206,4 +206,3 @@ class TestNormalizeUniqueId:
         once = normalize_unique_id("Some-Name (X)")
         assert normalize_unique_id(once) == once
 
-

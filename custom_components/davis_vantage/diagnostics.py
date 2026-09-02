@@ -96,4 +96,3 @@ async def async_get_config_entry_diagnostics(
         "last_data": async_redact_data(dict(coordinator.data or {}), TO_REDACT),
         "raw_loop_data": raw_data,
     }
-
