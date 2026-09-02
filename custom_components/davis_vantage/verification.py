@@ -193,7 +193,7 @@ def _read_exact(transport: _ProbeTransport, size: int, timeout: float) -> bytes:
 
 def _wake(transport: _ProbeTransport) -> bool:
     """Perform the Davis wake exchange, including the documented retry."""
-    for _ in range(2):
+    for _ in range(3):
         transport.write(b"\n")
         if _read_exact(transport, 2, VERIFY_TIMEOUT) == b"\n\r":
             return True
@@ -206,7 +206,13 @@ def _probe_loop2(transport: _ProbeTransport) -> bool:
     if _read_exact(transport, 1, VERIFY_TIMEOUT) != b"\x06":
         return False
     packet = _read_exact(transport, 99, VERIFY_TIMEOUT * 2)
-    return len(packet) == 99 and VantageProCRC(packet).check()
+    return (
+        len(packet) == 99
+        and packet[:3] == b"LOO"
+        and packet[4] == 1
+        and packet[95:97] == b"\n\r"
+        and VantageProCRC(packet).check()
+    )
 
 
 def verify_serial(endpoint: str) -> VerificationResult:

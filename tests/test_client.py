@@ -11,6 +11,7 @@ import time
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+from pyvantagepro.device import BadAckException
 
 from custom_components.davis_vantage.client import (
     DavisSerialXLink,
@@ -64,6 +65,33 @@ def pack_loop2(**overrides) -> bytes:
             values.append(0)
     struct_fmt = "=" + "".join(code for _, code in fmt)
     return struct.pack(struct_fmt, *values)
+
+
+@pytest.mark.asyncio
+async def test_direct_console_command_enforces_documented_response() -> None:
+    client = make_client()
+    vantage = MagicMock()
+    vantage.link.read.return_value = b"\n\rOK\n\r1.90\n\r"
+    client._vantagepro2 = vantage
+
+    assert await client.async_get_nver() == "\n\rOK\n\r1.90\n\r"
+    vantage.link.write.assert_called_once_with(b"NVER\n")
+    vantage.link.close.assert_called_once()
+    assert await client.async_close() is True
+
+
+@pytest.mark.asyncio
+async def test_direct_console_command_rejects_nak_and_releases_link() -> None:
+    client = make_client()
+    vantage = MagicMock()
+    vantage.link.read.return_value = b"!"
+    client._vantagepro2 = vantage
+
+    with pytest.raises(BadAckException):
+        await client.async_set_console_lamps(True)
+
+    vantage.link.close.assert_called()
+    assert await client.async_close() is True
 
 
 class TestGetLink:

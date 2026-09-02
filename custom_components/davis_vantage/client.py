@@ -9,6 +9,8 @@ import logging
 
 from zoneinfo import ZoneInfo
 from pyvantagepro import VantagePro2
+from pyvantagepro.device import BadAckException
+from pyvantagepro.link import link_from_url
 from pyvantagepro.parser import HighLowParserRevB, LoopDataParserRevB, DataParser
 
 if TYPE_CHECKING:
@@ -42,6 +44,7 @@ from .const import (
     PROTOCOL_NETWORK,
     DEFAULT_BAUD_RATE,
 )
+from .protocol import DavisProtocolClient, validate_loop_frame
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -186,7 +189,7 @@ class LoopData2Parser(LoopDataParserRevB):
     def __init__(self, data: bytes) -> None:
         # Deliberately skip LoopDataParserRevB.__init__ (LOOP1 format) and
         # go straight to the base DataParser with our own LOOP2 format.
-        DataParser.__init__(self, data, self.LOOP2_FORMAT)
+        DataParser.__init__(self, data, self.LOOP2_FORMAT, order="<")
 
         self["Barometer"] = self["Barometer"] / 1000
         self["TempIn"] = self["TempIn"] / 10
@@ -350,11 +353,13 @@ class DavisVantageClient:
 
     def get_vantagepro2fromurl(self, url: str) -> VantagePro2:
         if self._protocol == PROTOCOL_NETWORK:
-            vp = VantagePro2.from_url(url)
+            network_link = link_from_url(url)
+            network_link.settimeout(10)
+            vp = DavisProtocolClient(network_link)
         else:
             serial_link = DavisSerialXLink(self._link, self._baud_rate)
             serial_link.settimeout(10)
-            vp = VantagePro2(serial_link)
+            vp = DavisProtocolClient(serial_link)
         if self._should_close_after_transaction():
             vp.link.close()
         return vp
@@ -475,10 +480,9 @@ class DavisVantageClient:
         self._vantagepro2.wake_up()
         self._vantagepro2.send("LPS 2 1", self._vantagepro2.ACK)
         raw_data = self._vantagepro2.link.read(99, binary=True)
-        if len(raw_data) != 99:
-            raise ValueError(
-                f"Expected 99-byte LOOP2 packet, got {len(raw_data)} bytes"
-            )
+        if not isinstance(raw_data, bytes):
+            raw_data = raw_data.encode("latin-1")
+        validate_loop_frame(raw_data, 1)
         return LoopData2Parser(raw_data)
 
     async def async_get_current_data(self):
@@ -557,43 +561,53 @@ class DavisVantageClient:
         return raw_data
 
     # --- DEVICE ACTION METHODS ---
-    async def _async_send_console_command(self, command: str) -> str:
-        """Helper to send a direct serial command to the console."""
+    async def _async_send_console_command(
+        self, command: str, expected: bytes, *, response_size: int = 256
+    ) -> str:
+        """Send one command and enforce its documented response prefix."""
         def send_cmd():
             if not self._vantagepro2:
                 self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
-            self._vantagepro2.link.open()
-            self._vantagepro2.wake_up()
-            self._vantagepro2.link.write(command.encode('ascii'))
-
-            # Read response
-            response = self._vantagepro2.link.read(256, binary=True)
-            if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
-            return response.decode('ascii', errors='ignore')
+            try:
+                self._vantagepro2.link.open()
+                self._vantagepro2.wake_up()
+                self._vantagepro2.link.write(command.encode("ascii"))
+                response = self._vantagepro2.link.read(
+                    response_size, binary=True
+                )
+                if isinstance(response, str):
+                    response = response.encode("latin-1")
+                if response.startswith(b"\x21"):
+                    raise BadAckException()
+                if not response.startswith(expected):
+                    raise BadAckException()
+                return response.decode("ascii", errors="ignore")
+            finally:
+                if self._should_close_after_transaction():
+                    self._vantagepro2.link.close()
 
         return await self._async_run_io(send_cmd)
 
     async def async_set_console_lamps(self, state: bool):
         """Turn the physical console backlight on (1) or off (0)."""
         cmd = f"LAMPS {'1' if state else '0'}\n"
-        await self._async_send_console_command(cmd)
+        await self._async_send_console_command(cmd, b"\n\rOK\n\r")
 
     async def async_clear_alarms(self):
         """Clear all active alarm bits."""
-        await self._async_send_console_command("CLRBITS\n")
+        await self._async_send_console_command("CLRBITS\n", b"\x06", response_size=1)
 
     async def async_get_rxcheck(self):
         """Retrieve detailed connectivity diagnostics."""
-        return await self._async_send_console_command("RXCHECK\n")
+        return await self._async_send_console_command("RXCHECK\n", b"\n\rOK\n\r")
 
     async def async_get_nver(self) -> str:
         """Get the firmware version string (Vantage Pro2/Vue only)."""
-        return await self._async_send_console_command("NVER\n")
+        return await self._async_send_console_command("NVER\n", b"\n\rOK\n\r")
 
     async def async_get_bardata(self) -> str:
         """Get the current barometer calibration parameters as text."""
-        return await self._async_send_console_command("BARDATA\n")
+        return await self._async_send_console_command("BARDATA\n", b"\n\rOK\n\r")
 
     async def async_set_barometer_calibration(
         self, elevation_ft: int, bar_inhg: float = 0.0
@@ -607,7 +621,7 @@ class DavisVantageClient:
         """
         bar_value = 0 if bar_inhg == 0 else round(bar_inhg * 1000)
         cmd = f"BAR={bar_value} {elevation_ft}\n"
-        return await self._async_send_console_command(cmd)
+        return await self._async_send_console_command(cmd, b"\n\rOK\n\r")
 
     def get_eeprom(self, address_hex: str, size: int) -> bytes:
         """Read `size` bytes from EEPROM starting at `address_hex` (manual sec. XIII)."""
@@ -932,10 +946,7 @@ class DavisVantageClient:
                 self._vantagepro2.link.close()
 
     async def async_set_rain_collector(self, rain_collector: str):
-        try:
-            await self._async_run_io(self.set_rain_collector, rain_collector)
-        except Exception as e:
-            _LOGGER.error("Couldn't set rain collector: %s", e)
+        await self._async_run_io(self.set_rain_collector, rain_collector)
 
     def get_latitude_longitude_elevation(self) -> tuple[float, float, int]:
         latitude = longitude = None
@@ -1082,10 +1093,7 @@ class DavisVantageClient:
                 self._vantagepro2.link.close()
 
     async def async_set_archive_period(self, archive_period: int) -> None:
-        try:
-            await self._async_run_io(self.set_archive_period, archive_period)
-        except Exception as e:
-            _LOGGER.error("Couldn't set archive period: %s", e)
+        await self._async_run_io(self.set_archive_period, archive_period)
 
     async def async_begin_shutdown(self) -> None:
         """Reject new work before platforms and services begin unloading."""

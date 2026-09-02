@@ -680,7 +680,7 @@
         },
         "set_eeprom": {
             "name": "Write EEPROM",
-            "description": "Advanced/expert use only. Writes raw bytes to the console's EEPROM at a given address. Some addresses are factory calibration values that should never be written - check the manual's EEPROM address table before using this. There is no hardware protection against writing the wrong bytes to the wrong address.",
+            "description": "Advanced/expert use only. Writes raw bytes to an allowed console EEPROM range. Factory calibration fields and settings managed by BAR= or SETPER are blocked.",
             "fields": {
                 "address": {
                     "name": "Address",
