@@ -8,11 +8,15 @@ import asyncio
 import struct
 import threading
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from custom_components.davis_vantage.client import DavisVantageClient, LoopData2Parser
+from custom_components.davis_vantage.client import (
+    DavisSerialXLink,
+    DavisVantageClient,
+    LoopData2Parser,
+)
 from custom_components.davis_vantage.const import (
     CONNECTION_CONNECTED,
     CONNECTION_DEGRADED,
@@ -87,6 +91,20 @@ class TestGetLink:
             persistent_connection=True,
         )
         assert client._should_close_after_transaction() is True
+
+
+def test_serialx_link_explicitly_opens_transport_before_buffer_access():
+    """serialx constructs a closed transport and requires an explicit open."""
+    transport = MagicMock()
+    transport.is_open = False
+    with patch("serialx.serial_for_url", return_value=transport):
+        link = DavisSerialXLink("/dev/ttyUSB0", 19200)
+        link.open()
+
+    assert transport.mock_calls[:2] == [
+        call.open(),
+        call.reset_output_buffer(),
+    ]
 
 
 class TestCorrectRainValues:

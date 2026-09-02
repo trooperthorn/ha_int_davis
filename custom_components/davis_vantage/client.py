@@ -78,6 +78,8 @@ class DavisSerialXLink:
             timeout=self.timeout,
             write_timeout=self.timeout,
         )
+        # serialx returns a configured but closed transport.
+        self._serial.open()
         self._serial.reset_output_buffer()
 
     def close(self) -> None:

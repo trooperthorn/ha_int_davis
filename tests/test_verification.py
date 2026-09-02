@@ -58,6 +58,7 @@ def test_serial_probe_opens_only_submitted_endpoint_and_closes_it():
         timeout=2.0,
         write_timeout=2.0,
     )
+    transport.open.assert_called_once_with()
     transport.close.assert_called_once()
     assert result.protocol == PROTOCOL_SERIAL
     assert result.identity_strength == IDENTITY_WEAK

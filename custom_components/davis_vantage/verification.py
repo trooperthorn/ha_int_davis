@@ -219,12 +219,16 @@ def verify_serial(endpoint: str) -> VerificationResult:
     for baud_rate in SUPPORTED_BAUD_RATES:
         serial_port: _ProbeTransport | None = None
         try:
-            serial_port = serialx.serial_for_url(
+            serial_device = serialx.serial_for_url(
                 canonical,
                 baudrate=baud_rate,
                 timeout=VERIFY_TIMEOUT,
                 write_timeout=VERIFY_TIMEOUT,
             )
+            # Unlike pyserial, serialx constructs a closed transport.  Open it
+            # explicitly before the Davis wake exchange.
+            serial_device.open()
+            serial_port = serial_device
             opened = True
             if not _wake(serial_port):
                 continue
