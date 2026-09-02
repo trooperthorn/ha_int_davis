@@ -4,7 +4,6 @@ location redaction.
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 
 from custom_components.davis_vantage.diagnostics import (
     _try_console_command,
@@ -94,3 +93,5 @@ class TestAsyncGetConfigEntryDiagnostics:
         result = await async_get_config_entry_diagnostics(hass, entry)
 
         assert "link" not in result["config_entry"]
+
+

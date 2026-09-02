@@ -1,5 +1,5 @@
 """Tests for davis_vantage.utils - pure functions, no Home Assistant needed."""
-from datetime import date, datetime
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -13,7 +13,6 @@ from custom_components.davis_vantage.utils import (
     convert_celcius_to_fahrenheit,
     convert_kmh_to_bft,
     convert_kmh_to_ms,
-    convert_ms_to_bft,
     convert_to_celcius,
     convert_to_iso_datetime,
     convert_to_kmh,
@@ -206,3 +205,5 @@ class TestNormalizeUniqueId:
     def test_idempotent(self):
         once = normalize_unique_id("Some-Name (X)")
         assert normalize_unique_id(once) == once
+
+

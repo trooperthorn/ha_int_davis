@@ -1,22 +1,23 @@
 """All client function"""
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import struct
 import re
 from datetime import datetime, time, date, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import logging
 
 from zoneinfo import ZoneInfo
 from pyvantagepro import VantagePro2
 from pyvantagepro.parser import HighLowParserRevB, LoopDataParserRevB, DataParser
-from pyvantagepro.utils import ListDict
-from homeassistant.core import HomeAssistant
+
+if TYPE_CHECKING:
+    from serialx import BaseSerial
 
 from .utils import (
     calc_dew_point,
     calc_feels_like,
     calc_wind_chill,
-    contains_correct_raw_data,
     calc_heat_index,
     convert_kmh_to_bft,
     convert_to_iso_datetime,
@@ -27,6 +28,14 @@ from .utils import (
     get_wind_rose,
 )
 from .const import (
+    CONNECTION_CLOSED,
+    CONNECTION_CONNECTED,
+    CONNECTION_CONNECTING,
+    CONNECTION_DEGRADED,
+    CONNECTION_DISCONNECTED,
+    CONNECTION_RECONNECTING,
+    CONNECTION_STOPPING,
+    DEFAULT_SHUTDOWN_TIMEOUT,
     RAIN_COLLECTOR_IMPERIAL,
     RAIN_COLLECTOR_METRIC,
     RAIN_COLLECTOR_METRIC_0_1,
@@ -35,6 +44,82 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class DavisSerialXLink:
+    """PyVantagePro-compatible link backed by serialx.serial_for_url()."""
+
+    def __init__(
+        self,
+        endpoint: str,
+        baudrate: int,
+        *,
+        timeout: float = 10,
+    ) -> None:
+        self.endpoint = endpoint
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self._serial: BaseSerial | None = None
+
+    @property
+    def url(self) -> str:
+        """Return a diagnostic URL without opening the interface."""
+        return f"serial:{self.endpoint}:{self.baudrate}:8N1"
+
+    def open(self) -> None:
+        """Open a path or supported serial URL."""
+        if self._serial is not None and self._serial.is_open:
+            return
+        import serialx
+
+        self._serial = serialx.serial_for_url(
+            self.endpoint,
+            baudrate=self.baudrate,
+            timeout=self.timeout,
+            write_timeout=self.timeout,
+        )
+        self._serial.reset_output_buffer()
+
+    def close(self) -> None:
+        """Close the serial interface."""
+        if self._serial is not None:
+            if self._serial.is_open:
+                self._serial.close()
+            self._serial = None
+
+    def settimeout(self, timeout: float) -> None:
+        """Set the read timeout."""
+        self.timeout = timeout
+        if self._serial is not None:
+            self._serial.timeout = timeout
+
+    def write(self, data: str | bytes) -> None:
+        """Write command or binary data."""
+        self.open()
+        assert self._serial is not None
+        payload = data.encode("utf-8") if isinstance(data, str) else data
+        self._serial.write(payload)
+
+    def read(
+        self, size: int | None = None, timeout: float | None = None, binary: bool = False
+    ) -> str | bytes:
+        """Read data using the legacy PyVantagePro link contract."""
+        self.open()
+        assert self._serial is not None
+        previous_timeout = self._serial.timeout
+        self._serial.timeout = timeout or self.timeout
+        try:
+            data = self._serial.read(size or 4048)
+        finally:
+            self._serial.timeout = (
+                previous_timeout if previous_timeout is not None else self.timeout
+            )
+        if binary:
+            return data
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data
 
 
 class LoopData2Parser(LoopDataParserRevB):
@@ -153,17 +238,89 @@ class DavisVantageClient:
         self._last_raw_data = {}  # type: ignore
         self._last_raw_hilows = {}  # type: ignore
         self._persistent_connection = persistent_connection
-        self._use_loop2 = use_loop2  # CRITICAL FIX: Uncommented
+        self._use_loop2 = use_loop2
         self._baud_rate = baud_rate or DEFAULT_BAUD_RATE
-        # All serial I/O runs via loop.run_in_executor(None, ...), which uses
-        # the default (multi-worker) thread pool. Without this lock, a
-        # service call (e.g. set_console_lamps) firing while the coordinator's
-        # poll is mid-flight would run on a second thread and touch the same
-        # underlying pyserial connection concurrently - corrupting the
-        # wake-up handshake or interleaving bytes on the wire. Every async_*
-        # method below takes this lock before handing work to the executor,
-        # so all device access is serialized regardless of which thread runs it.
-        self._io_lock = asyncio.Lock()
+        # One entry owns one single-worker executor. Cancelling an HA waiter
+        # never cancels or releases ownership of the blocking Davis operation.
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="davis-vantage"
+        )
+        self._submit_lock = asyncio.Lock()
+        self._pending_io: set[asyncio.Future[Any]] = set()
+        self._stopping = False
+        self._executor_shutdown = False
+        self._needs_reconnect = False
+        self._connection_state = CONNECTION_DISCONNECTED
+        self._last_success: str | None = None
+        self._last_failure: str | None = None
+        self._last_failure_time: str | None = None
+        self._failure_streak = 0
+        self._reconnect_count = 0
+        self._last_close_result: str | None = None
+
+    def _should_close_after_transaction(self) -> bool:
+        """WeatherLink TCP must periodically release port 22222 for cloud uploads."""
+        return not self._persistent_connection or self._protocol == PROTOCOL_NETWORK
+
+    def _close_transport_sync(self) -> None:
+        """Close without constructing a lazy transport."""
+        if self._vantagepro2 is not None:
+            self._vantagepro2.link.close()
+
+    def _execute_owned(self, func, args: tuple[Any, ...]) -> Any:
+        """Execute one operation on the dedicated worker."""
+        if self._needs_reconnect:
+            self._connection_state = CONNECTION_RECONNECTING
+            try:
+                self._close_transport_sync()
+            except (OSError, TimeoutError):
+                pass
+            self._vantagepro2 = None
+            self._needs_reconnect = False
+            self._reconnect_count += 1
+        try:
+            result = func(*args)
+        except Exception as err:
+            self._connection_state = CONNECTION_DEGRADED
+            self._last_failure = str(err)
+            self._last_failure_time = datetime.now().isoformat()
+            self._failure_streak += 1
+            self._needs_reconnect = True
+            try:
+                self._close_transport_sync()
+            except (OSError, TimeoutError):
+                pass
+            self._vantagepro2 = None
+            raise
+        self._connection_state = CONNECTION_CONNECTED
+        self._last_success = datetime.now().isoformat()
+        self._failure_streak = 0
+        return result
+
+    async def _async_run_io(self, func, *args: Any) -> Any:
+        """Queue one device operation and shield its physical ownership."""
+        async with self._submit_lock:
+            if self._stopping or self._executor_shutdown:
+                raise RuntimeError("Davis transport is stopping")
+            concurrent_future = self._executor.submit(self._execute_owned, func, args)
+            future = asyncio.wrap_future(concurrent_future)
+            self._pending_io.add(future)
+            future.add_done_callback(self._pending_io.discard)
+        return await asyncio.shield(future)
+
+    @property
+    def connection_diagnostics(self) -> dict[str, Any]:
+        """Return non-sensitive transport lifecycle diagnostics."""
+        return {
+            "state": self._connection_state,
+            "last_success": self._last_success,
+            "last_failure": self._last_failure,
+            "last_failure_time": self._last_failure_time,
+            "failure_streak": self._failure_streak,
+            "reconnect_count": self._reconnect_count,
+            "in_flight_or_queued": len(self._pending_io),
+            "last_close_result": self._last_close_result,
+        }
 
     @property
     def latitude(self) -> float:
@@ -190,40 +347,37 @@ class DavisVantageClient:
         return self._vantagepro2.link
 
     def get_vantagepro2fromurl(self, url: str) -> VantagePro2:
-        try:
+        if self._protocol == PROTOCOL_NETWORK:
             vp = VantagePro2.from_url(url)
-            if not self._persistent_connection:
-                vp.link.close()
-            return vp
-        except Exception as e:
-            raise e
+        else:
+            serial_link = DavisSerialXLink(self._link, self._baud_rate)
+            serial_link.settimeout(10)
+            vp = VantagePro2(serial_link)
+        if self._should_close_after_transaction():
+            vp.link.close()
+        return vp
 
     async def async_get_vantagepro2fromurl(self, url: str):
         _LOGGER.debug("async_get_vantagepro2fromurl with url=%s", url)
-        vp = None
         try:
-            loop = asyncio.get_event_loop()
-            async with self._io_lock:
-                vp = await loop.run_in_executor(None, self.get_vantagepro2fromurl, url)
-        except Exception as e:
-            _LOGGER.error("Error on opening device from url: %s: %s", url, e)
-        return vp
+            return await self._async_run_io(self.get_vantagepro2fromurl, url)
+        except Exception as err:
+            _LOGGER.error("Error on opening device from url: %s: %s", url, err)
+            return None
 
     async def connect_to_station(self) -> None:
-        """Connect to the Davis station and verify the serial link is active."""
-        if not self._vantagepro2:
-            self._vantagepro2 = await self.async_get_vantagepro2fromurl(self.get_link())
-        
-        if not self._vantagepro2:
-            raise ConnectionError(f"Failed to create VantagePro2 object for {self._link}")
+        """Connect to the Davis station and perform a real wake exchange."""
+        self._connection_state = CONNECTION_CONNECTING
 
-        async with self._io_lock:
-            await self._hass.async_add_executor_job(self._vantagepro2.link.open)
+        def _connect() -> None:
+            if self._vantagepro2 is None:
+                self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+            self._vantagepro2.link.open()
+            self._vantagepro2.wake_up()
+            if self._should_close_after_transaction():
+                self._vantagepro2.link.close()
 
-        if not hasattr(self._vantagepro2, "link") or self._vantagepro2.link is None:
-            raise ConnectionError(
-                f"Serial port opened at {self._link}, but Davis console failed to ACK wake-up signal."
-            )
+        await self._async_run_io(_connect)
 
     async def get_station_info(self):
         static_info = await self.async_get_static_info()
@@ -263,7 +417,7 @@ class DavisVantageClient:
                 
             _LOGGER.debug("End get_current_data:")
         except Exception as e:
-            if not self._persistent_connection:
+            if self._should_close_after_transaction():
                 self._vantagepro2.link.close()
             raise e
 
@@ -301,7 +455,7 @@ class DavisVantageClient:
                 _LOGGER.debug("End get_rain_collector")
             except Exception as e:
                 _LOGGER.error("Couldn't get rain_collector: %s", e)
-        if not self._persistent_connection:
+        if self._should_close_after_transaction():
             self._vantagepro2.link.close()
 
         self._last_readout_duration = (datetime.now() - start_readout).total_seconds()
@@ -329,11 +483,9 @@ class DavisVantageClient:
         """Get current date from weather station async."""
         data = self._last_data
         try:
-            loop = asyncio.get_event_loop()
-            async with self._io_lock:
-                new_data, archives, hilows = await loop.run_in_executor(
-                    None, self.get_current_data
-                )
+            new_data, archives, hilows = await self._async_run_io(
+                self.get_current_data
+            )
             if new_data:
                 new_raw_data = self.__get_full_raw_data(new_data)
                 self._last_raw_data = new_raw_data
@@ -414,13 +566,11 @@ class DavisVantageClient:
 
             # Read response
             response = self._vantagepro2.link.read(256, binary=True)
-            if not self._persistent_connection:
+            if self._should_close_after_transaction():
                 self._vantagepro2.link.close()
             return response.decode('ascii', errors='ignore')
 
-        loop = asyncio.get_event_loop()
-        async with self._io_lock:
-            return await loop.run_in_executor(None, send_cmd)
+        return await self._async_run_io(send_cmd)
 
     async def async_set_console_lamps(self, state: bool):
         """Turn the physical console backlight on (1) or off (0)."""
@@ -466,14 +616,12 @@ class DavisVantageClient:
             self._vantagepro2.wake_up()
             return self._vantagepro2.read_from_eeprom(address_hex, size)
         finally:
-            if not self._persistent_connection:
+            if self._should_close_after_transaction():
                 self._vantagepro2.link.close()
 
     async def async_get_eeprom(self, address_hex: str, size: int) -> str:
         """Read EEPROM bytes and return them as a hex string."""
-        loop = asyncio.get_event_loop()
-        async with self._io_lock:
-            data = await loop.run_in_executor(None, self.get_eeprom, address_hex, size)
+        data = await self._async_run_io(self.get_eeprom, address_hex, size)
         return data.hex()
 
     def set_eeprom(self, address_hex: str, data: bytes) -> None:
@@ -492,15 +640,13 @@ class DavisVantageClient:
             self._vantagepro2.wake_up()
             self._vantagepro2.write_to_eeprom(address_hex, len(data), data)
         finally:
-            if not self._persistent_connection:
+            if self._should_close_after_transaction():
                 self._vantagepro2.link.close()
 
     async def async_set_eeprom(self, address_hex: str, data_hex: str) -> None:
         """Write a hex string of bytes to EEPROM starting at `address_hex`."""
         data = bytes.fromhex(data_hex)
-        loop = asyncio.get_event_loop()
-        async with self._io_lock:
-            await loop.run_in_executor(None, self.set_eeprom, address_hex, data)
+        await self._async_run_io(self.set_eeprom, address_hex, data)
     # -----------------------------
 
     def add_additional_info(self, data: dict[str, Any]) -> None:
@@ -747,16 +893,19 @@ class DavisVantageClient:
         }
         if not self._vantagepro2:
             self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
-        self._vantagepro2.wake_up()
-        rain_collector = self._vantagepro2.get_rain_collector()
-        return rain_collector_map.get(rain_collector, "")
+        try:
+            self._vantagepro2.link.open()
+            self._vantagepro2.wake_up()
+            rain_collector = self._vantagepro2.get_rain_collector()
+            return rain_collector_map.get(rain_collector, "")
+        finally:
+            if self._should_close_after_transaction():
+                self._vantagepro2.link.close()
 
     async def async_get_rain_collector(self) -> str:
         info = ""
         try:
-            loop = asyncio.get_event_loop()
-            async with self._io_lock:
-                info = await loop.run_in_executor(None, self.get_rain_collector)
+            info = await self._async_run_io(self.get_rain_collector)
         except Exception as e:
             _LOGGER.error("Couldn't get rain collector: %s", e)
         return info
@@ -769,17 +918,20 @@ class DavisVantageClient:
         }
         if not self._vantagepro2:
             self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
-        self._vantagepro2.set_rain_collector(
-            rain_collector_map.get(rain_collector, 0x00)
-        )
-        # Invalidate the cache so the next poll re-reads the new setting.
-        self._rain_collector = ""
+        try:
+            self._vantagepro2.link.open()
+            self._vantagepro2.set_rain_collector(
+                rain_collector_map.get(rain_collector, 0x00)
+            )
+            # Invalidate the cache so the next poll re-reads the new setting.
+            self._rain_collector = ""
+        finally:
+            if self._should_close_after_transaction():
+                self._vantagepro2.link.close()
 
     async def async_set_rain_collector(self, rain_collector: str):
         try:
-            loop = asyncio.get_event_loop()
-            async with self._io_lock:
-                await loop.run_in_executor(None, self.set_rain_collector, rain_collector)
+            await self._async_run_io(self.set_rain_collector, rain_collector)
         except Exception as e:
             _LOGGER.error("Couldn't set rain collector: %s", e)
 
@@ -787,20 +939,23 @@ class DavisVantageClient:
         latitude = longitude = None
         if not self._vantagepro2:
             self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
-        data = self._vantagepro2.read_from_eeprom("0B", 6)
-        latitude, longitude, elevation = struct.unpack(b"hhh", data) 
-        latitude /= 10
-        longitude /= 10
-        return latitude, longitude, elevation
+        try:
+            self._vantagepro2.link.open()
+            data = self._vantagepro2.read_from_eeprom("0B", 6)
+            latitude, longitude, elevation = struct.unpack(b"hhh", data)
+            latitude /= 10
+            longitude /= 10
+            return latitude, longitude, elevation
+        finally:
+            if self._should_close_after_transaction():
+                self._vantagepro2.link.close()
 
     async def async_get_latitude_longitude_elevation(self):
         latitude = longitude = elevation = None
         try:
-            loop = asyncio.get_event_loop()
-            async with self._io_lock:
-                latitude, longitude, elevation = await loop.run_in_executor(
-                    None, self.get_latitude_longitude_elevation
-                )
+            latitude, longitude, elevation = await self._async_run_io(
+                self.get_latitude_longitude_elevation
+            )
         except Exception as e:
             _LOGGER.error("Couldn't get latitude longitude: %s", e)
         return latitude, longitude, elevation
@@ -815,16 +970,14 @@ class DavisVantageClient:
         except Exception as e:
             raise e
         finally:
-            if not self._persistent_connection:
+            if self._should_close_after_transaction():
                 self._vantagepro2.link.close()
         return data
 
     async def async_get_davis_time(self) -> datetime | None:
         data = None
         try:
-            loop = asyncio.get_event_loop()
-            async with self._io_lock:
-                data = await loop.run_in_executor(None, self.get_davis_time)
+            data = await self._async_run_io(self.get_davis_time)
         except Exception as e:
             _LOGGER.error("Couldn't get davis time: %s", e)
         return data
@@ -838,14 +991,12 @@ class DavisVantageClient:
         except Exception as e:
             raise e
         finally:
-            if not self._persistent_connection:
+            if self._should_close_after_transaction():
                 self._vantagepro2.link.close()
 
     async def async_set_davis_time(self) -> None:
         try:
-            loop = asyncio.get_event_loop()
-            async with self._io_lock:
-                await loop.run_in_executor(None, self.set_davis_time, datetime.now())
+            await self._async_run_io(self.set_davis_time, datetime.now())
         except Exception as e:
             _LOGGER.error("Couldn't set davis time: %s", e)
 
@@ -860,7 +1011,7 @@ class DavisVantageClient:
         except Exception as e:
             raise e
         finally:
-            if not self._persistent_connection:
+            if self._should_close_after_transaction():
                 self._vantagepro2.link.close()
         return {
             "version": firmware_version,
@@ -871,9 +1022,7 @@ class DavisVantageClient:
     async def async_get_info(self) -> dict[str, Any] | None:
         info = None
         try:
-            loop = asyncio.get_event_loop()
-            async with self._io_lock:
-                info = await loop.run_in_executor(None, self.get_info)
+            info = await self._async_run_io(self.get_info)
         except Exception as e:
             _LOGGER.error("Couldn't get firmware info: %s", e)
         return info
@@ -888,16 +1037,14 @@ class DavisVantageClient:
         except Exception as e:
             raise e
         finally:
-            if not self._persistent_connection:
+            if self._should_close_after_transaction():
                 self._vantagepro2.link.close()
         return {"version": firmware_version, "archive_period": archive_period}
 
     async def async_get_static_info(self) -> dict[str, Any] | None:
         info = None
         try:
-            loop = asyncio.get_event_loop()
-            async with self._io_lock:
-                info = await loop.run_in_executor(None, self.get_static_info)
+            info = await self._async_run_io(self.get_static_info)
         except Exception as e:
             _LOGGER.error("Couldn't get static info: %s", e)
         return info
@@ -911,14 +1058,12 @@ class DavisVantageClient:
         except Exception as e:
             raise e
         finally:
-            if not self._persistent_connection:
+            if self._should_close_after_transaction():
                 self._vantagepro2.link.close()
 
     async def async_set_yearly_rain(self, rain_clicks: int) -> None:
         try:
-            loop = asyncio.get_event_loop()
-            async with self._io_lock:
-                await loop.run_in_executor(None, self.set_yearly_rain, rain_clicks)
+            await self._async_run_io(self.set_yearly_rain, rain_clicks)
         except Exception as e:
             _LOGGER.error("Couldn't set yearly rain: %s", e)
 
@@ -931,40 +1076,63 @@ class DavisVantageClient:
         except Exception as e:
             raise e
         finally:
-            if not self._persistent_connection:
+            if self._should_close_after_transaction():
                 self._vantagepro2.link.close()
 
     async def async_set_archive_period(self, archive_period: int) -> None:
         try:
-            loop = asyncio.get_event_loop()
-            async with self._io_lock:
-                await loop.run_in_executor(None, self.set_archive_period, archive_period)
+            await self._async_run_io(self.set_archive_period, archive_period)
         except Exception as e:
             _LOGGER.error("Couldn't set archive period: %s", e)
 
-    async def async_close(self) -> None:
-        """Release the underlying serial/TCP connection, if one is open.
+    async def async_begin_shutdown(self) -> None:
+        """Reject new work before platforms and services begin unloading."""
+        async with self._submit_lock:
+            self._stopping = True
+            self._connection_state = CONNECTION_STOPPING
 
-        Deliberately checks `self._vantagepro2` directly rather than the
-        `link` property - that property lazily *opens* a connection when
-        none exists yet, which would be exactly wrong during shutdown.
-        """
-        if self._vantagepro2 is None:
-            return
+    async def async_close(self) -> bool:
+        """Stop new work, drain physical ownership, then close the transport."""
+        async with self._submit_lock:
+            if self._executor_shutdown:
+                return self._last_close_result == "closed"
+            self._stopping = True
+            self._connection_state = CONNECTION_STOPPING
+            pending = tuple(self._pending_io)
 
-        def _close() -> None:
-            assert self._vantagepro2 is not None
-            self._vantagepro2.link.close()
+        try:
+            async with asyncio.timeout(DEFAULT_SHUTDOWN_TIMEOUT):
+                if pending:
+                    await asyncio.gather(
+                        *(asyncio.shield(future) for future in pending),
+                        return_exceptions=True,
+                    )
+                close_future = asyncio.wrap_future(
+                    self._executor.submit(self._close_transport_sync)
+                )
+                await asyncio.shield(close_future)
+        except TimeoutError:
+            self._last_close_result = "timeout_waiting_for_in_flight_io"
+            _LOGGER.error("Timed out waiting for Davis transport shutdown")
+            return False
+        except Exception as err:
+            self._last_close_result = f"close_failed: {err}"
+            _LOGGER.error("Error closing Davis station connection: %s", err)
+            self._executor.shutdown(wait=True, cancel_futures=False)
+            self._executor_shutdown = True
+            self._connection_state = CONNECTION_DEGRADED
+            return False
 
-        loop = asyncio.get_event_loop()
-        async with self._io_lock:
-            try:
-                await loop.run_in_executor(None, _close)
-            except Exception as e:
-                _LOGGER.error("Error closing Davis station connection: %s", e)
+        self._vantagepro2 = None
+        self._executor.shutdown(wait=False, cancel_futures=False)
+        self._executor_shutdown = True
+        self._connection_state = CONNECTION_CLOSED
+        self._last_close_result = "closed"
+        return True
 
     def get_iso_now(self) -> datetime:
         now = convert_to_iso_datetime(
             datetime.now(), ZoneInfo(self._hass.config.time_zone)
         )
         return now
+

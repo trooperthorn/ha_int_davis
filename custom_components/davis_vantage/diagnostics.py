@@ -17,10 +17,28 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from . import DavisConfigEntry
+from .const import (
+    CONFIG_BAUD_RATE,
+    CONFIG_IDENTITY_SOURCE,
+    CONFIG_IDENTITY_STRENGTH,
+    CONFIG_INTERVAL,
+    CONFIG_LOOP2_SUPPORTED,
+    CONFIG_PERSISTENT_CONNECTION,
+    CONFIG_PROTOCOL,
+    CONF_USE_LOOP2,
+)
 
 # Station latitude/longitude are personal location data - redact them from
 # any diagnostics dump a user might attach to a public GitHub issue.
-TO_REDACT = {"Latitude", "Longitude", "latitude", "longitude"}
+TO_REDACT = {
+    "Latitude",
+    "Longitude",
+    "latitude",
+    "longitude",
+    "EEPROM",
+    "eeprom",
+    "raw_eeprom",
+}
 
 
 async def _try_console_command(func: Callable[[], Awaitable[str]]) -> str:
@@ -50,24 +68,25 @@ async def async_get_config_entry_diagnostics(
 
     raw_data = dict(client.get_raw_data())
     raw_data.pop("_raw_bytes", None)
+    connection = dict(getattr(client, "connection_diagnostics", {}) or {})
+    connection["coordinator_failure_streak"] = getattr(
+        coordinator, "consecutive_failures", getattr(coordinator, "_consecutive_failures", 0)
+    )
 
     return {
         "config_entry": {
-            "protocol": config_entry.data.get("protocol"),
-            "use_loop2": config_entry.options.get(
-                "use_loop2", config_entry.data.get("use_loop2")
-            ),
-            "baud_rate": config_entry.options.get(
-                "baud_rate", config_entry.data.get("baud_rate")
-            ),
-            "interval": config_entry.options.get(
-                "interval", config_entry.data.get("interval")
-            ),
+            "protocol": config_entry.data.get(CONFIG_PROTOCOL),
+            "identity_source": config_entry.data.get(CONFIG_IDENTITY_SOURCE),
+            "identity_strength": config_entry.data.get(CONFIG_IDENTITY_STRENGTH),
+            "loop2_supported": config_entry.data.get(CONFIG_LOOP2_SUPPORTED),
+            "use_loop2": config_entry.options.get(CONF_USE_LOOP2, False),
+            "baud_rate": config_entry.data.get(CONFIG_BAUD_RATE),
+            "interval": config_entry.options.get(CONFIG_INTERVAL),
             "persistent_connection": config_entry.options.get(
-                "persistent_connection",
-                config_entry.data.get("persistent_connection"),
+                CONFIG_PERSISTENT_CONNECTION, False
             ),
         },
+        "connection": connection,
         "console": {
             "firmware_version": client.firmware_version,
             "rxcheck": rxcheck,
@@ -77,3 +96,4 @@ async def async_get_config_entry_diagnostics(
         "last_data": async_redact_data(dict(coordinator.data or {}), TO_REDACT),
         "raw_loop_data": raw_data,
     }
+

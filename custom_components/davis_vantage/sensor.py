@@ -14,7 +14,6 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    DEGREE,
     PERCENTAGE,
     EntityCategory,
     UnitOfElectricPotential,
@@ -29,7 +28,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -644,3 +642,5 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
         # Save the valid value to _attr_native_value so we can use it for retention later
         self._attr_native_value = value
         return value
+
+

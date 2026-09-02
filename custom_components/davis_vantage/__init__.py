@@ -3,6 +3,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import logging
+from uuid import uuid4
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -22,10 +23,17 @@ from .const import (
     CONFIG_LINK,
     CONFIG_PERSISTENT_CONNECTION,
     CONFIG_BAUD_RATE,
+    CONFIG_IDENTITY,
+    CONFIG_IDENTITY_SOURCE,
+    CONFIG_IDENTITY_STRENGTH,
+    CONFIG_LOOP2_SUPPORTED,
+    CONF_USE_LOOP2,
     DEFAULT_BAUD_RATE,
+    IDENTITY_STRONG,
 )
 from .coordinator import DavisVantageDataUpdateCoordinator
-from .services import DavisServicesSetup
+from .services import async_setup_services
+from .verification import default_verification_result
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.WEATHER]
 
@@ -44,6 +52,70 @@ class RuntimeData:
 type DavisConfigEntry = ConfigEntry[RuntimeData]
 
 
+async def async_migrate_entry(
+    hass: HomeAssistant, config_entry: DavisConfigEntry
+) -> bool:
+    """Migrate legacy mixed data/options entries to version 2."""
+    if config_entry.version >= 2:
+        return True
+
+    data = dict(config_entry.data)
+    options = dict(config_entry.options)
+    for key, default in (
+        (CONFIG_INTERVAL, 30),
+        (CONF_USE_LOOP2, False),
+        (CONFIG_PERSISTENT_CONNECTION, False),
+    ):
+        if key in data:
+            options.setdefault(key, data.pop(key))
+        else:
+            options.setdefault(key, default)
+
+    protocol = data.get(CONFIG_PROTOCOL, "")
+    endpoint = data.get(CONFIG_LINK, "")
+    try:
+        detected = await hass.async_add_executor_job(
+            default_verification_result, protocol, endpoint
+        )
+        data[CONFIG_LINK] = detected.endpoint
+        data[CONFIG_LOOP2_SUPPORTED] = bool(
+            data.get(CONFIG_LOOP2_SUPPORTED, options.get(CONF_USE_LOOP2, False))
+        )
+        if detected.baud_rate is not None:
+            data.setdefault(CONFIG_BAUD_RATE, detected.baud_rate)
+        else:
+            data.pop(CONFIG_BAUD_RATE, None)
+
+        if detected.identity_strength == IDENTITY_STRONG:
+            identity = detected.identity
+            source = detected.identity_source
+            strength = detected.identity_strength
+        else:
+            identity = data.get(CONFIG_IDENTITY, f"generated:{uuid4()}")
+            source = data.get(CONFIG_IDENTITY_SOURCE, "generated")
+            strength = data.get(
+                CONFIG_IDENTITY_STRENGTH, detected.identity_strength
+            )
+    except Exception as err:
+        _LOGGER.warning("Could not canonicalize legacy Davis entry: %s", err)
+        identity = data.get(CONFIG_IDENTITY, f"generated:{uuid4()}")
+        source = data.get(CONFIG_IDENTITY_SOURCE, "generated")
+        strength = data.get(CONFIG_IDENTITY_STRENGTH, "weak")
+
+    data[CONFIG_IDENTITY] = identity
+    data[CONFIG_IDENTITY_SOURCE] = source
+    data[CONFIG_IDENTITY_STRENGTH] = strength
+    unique_id = config_entry.unique_id or f"davis:{identity}"
+    hass.config_entries.async_update_entry(
+        config_entry,
+        data=data,
+        options=options,
+        unique_id=unique_id,
+        version=2,
+    )
+    return True
+
+
 async def async_setup_entry(
     hass: HomeAssistant, config_entry: DavisConfigEntry
 ) -> bool:
@@ -58,33 +130,22 @@ async def async_setup_entry(
     link = config_entry.data.get(CONFIG_LINK, "")
     
     persistent_connection = config_entry.options.get(
-        CONFIG_PERSISTENT_CONNECTION, 
-        config_entry.data.get(CONFIG_PERSISTENT_CONNECTION, False)
+        CONFIG_PERSISTENT_CONNECTION, False
     )
 
     # 2. Client instantiation
-    # Handles both signature variations (with or without use_loop2 parameter)
-    baud_rate = config_entry.options.get(
-        CONFIG_BAUD_RATE,
-        config_entry.data.get(CONFIG_BAUD_RATE, DEFAULT_BAUD_RATE),
+    baud_rate = config_entry.data.get(CONFIG_BAUD_RATE, DEFAULT_BAUD_RATE)
+    use_loop2 = config_entry.options.get(CONF_USE_LOOP2, False) and bool(
+        config_entry.data.get(CONFIG_LOOP2_SUPPORTED, False)
     )
-
-    try:
-        use_loop2 = config_entry.options.get(
-            "use_loop2",
-            config_entry.data.get("use_loop2", False)
-        )
-        client = DavisVantageClient(
-            hass,
-            protocol,
-            link,
-            persistent_connection,
-            use_loop2=use_loop2,
-            baud_rate=baud_rate,
-        )
-    except TypeError:
-        # Fallback if custom DavisVantageClient does not accept use_loop2 in __init__
-        client = DavisVantageClient(hass, protocol, link, persistent_connection)
+    client = DavisVantageClient(
+        hass,
+        protocol,
+        link,
+        persistent_connection,
+        use_loop2=use_loop2,
+        baud_rate=baud_rate,
+    )
 
     # 3. Verify hardware connectivity
     try:
@@ -96,11 +157,18 @@ async def async_setup_entry(
             link,
             err,
         )
+        await client.async_begin_shutdown()
+        await client.async_close()
         raise ConfigEntryNotReady(f"Failed to connect to Davis station: {err}") from err
 
     # 4. Device Registry Information
     device_info = DeviceInfo(
-        identifiers={(DOMAIN, config_entry.entry_id)},
+        identifiers={
+            (
+                DOMAIN,
+                config_entry.data.get(CONFIG_IDENTITY, config_entry.entry_id),
+            )
+        },
         manufacturer=MANUFACTURER,
         name=NAME,
         model=config_entry.data.get(CONFIG_STATION_MODEL, "Davis Vantage Weather Station"),
@@ -124,6 +192,7 @@ async def async_setup_entry(
         # Ensure the connection is closed before failing setup, so HA's
         # automatic retry of ConfigEntryNotReady doesn't hit "Resource busy"
         # trying to reopen a port this entry never released.
+        await client.async_begin_shutdown()
         await client.async_close()
         raise ConfigEntryNotReady(f"Initial data fetch failed: {err}") from err
 
@@ -139,31 +208,27 @@ async def async_setup_entry(
         config_entry.add_update_listener(async_reload_entry)
     )
 
-    # 9. Register Services / Actions
-    # DavisServicesSetup.__init__ calls hass.services.register() (the
-    # thread-safe sync variant, per services.py) - run it off the event loop.
-    await hass.async_add_executor_job(DavisServicesSetup, hass, config_entry)
+    # 9. Register domain services once; handlers resolve the requested entry.
+    async_setup_services(hass)
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry) -> bool:
     """Unload a config entry and release serial/network resources."""
+    coordinator = config_entry.runtime_data.coordinator
+    client = coordinator.client
+    await client.async_begin_shutdown()
+
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry, PLATFORMS
     )
 
     if unload_ok:
-        coordinator = config_entry.runtime_data.coordinator
-        client = coordinator.client
-
-        # Release the serial/TCP connection to prevent 'Resource busy' errors on reload.
-        # async_close() only touches the connection if one was actually opened -
-        # it never triggers the `link` property's lazy-connect behavior.
-        try:
-            await client.async_close()
-        except Exception as err:
-            _LOGGER.error("Error closing Davis station connection during unload: %s", err)
+        close_ok = await client.async_close()
+        if not close_ok:
+            _LOGGER.error("Davis transport did not confirm closure; unload refused")
+            return False
 
         # Don't leave a stale "connection lost" repair issue behind if the
         # user removes the integration while one is open.
@@ -178,3 +243,4 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry
 async def async_reload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry) -> None:
     """Reload config entry when options are updated."""
     await hass.config_entries.async_reload(config_entry.entry_id)
+

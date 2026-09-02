@@ -38,8 +38,27 @@ CONFIG_PROTOCOL = "protocol"
 CONFIG_LINK = "link"
 CONFIG_PERSISTENT_CONNECTION = "persistent_connection"
 CONF_USE_LOOP2 = "use_loop2"
+CONFIG_IDENTITY = "identity"
+CONFIG_IDENTITY_SOURCE = "identity_source"
+CONFIG_IDENTITY_STRENGTH = "identity_strength"
+CONFIG_LOOP2_SUPPORTED = "loop2_supported"
+
+IDENTITY_STRONG = "strong"
+IDENTITY_WEAK = "weak"
+
+CONNECTION_DISCONNECTED = "disconnected"
+CONNECTION_CONNECTING = "connecting"
+CONNECTION_CONNECTED = "connected"
+CONNECTION_DEGRADED = "degraded"
+CONNECTION_RECONNECTING = "reconnecting"
+CONNECTION_STOPPING = "stopping"
+CONNECTION_CLOSED = "closed"
 
 CONFIG_BAUD_RATE = "baud_rate"
 DEFAULT_BAUD_RATE = 19200
 # Valid console baud rates, fastest first, per the Davis serial protocol.
 SUPPORTED_BAUD_RATES = [19200, 14400, 9600, 4800, 2400, 1200]
+
+DEFAULT_IO_TIMEOUT = 15
+DEFAULT_SHUTDOWN_TIMEOUT = 30
+

@@ -1,9 +1,22 @@
 set_davis_time:
+  fields:
+    entry_id: &entry_id
+      required: false
+      selector:
+        config_entry:
+          integration: davis_vantage
 get_davis_time:
+  fields:
+    entry_id: *entry_id
 get_raw_data:
+  fields:
+    entry_id: *entry_id
 get_info:
+  fields:
+    entry_id: *entry_id
 set_yearly_rain:
   fields:
+    entry_id: *entry_id
     rain_clicks:
       required: true
       example: 500
@@ -11,6 +24,7 @@ set_yearly_rain:
         number:
 set_archive_period:
   fields:
+    entry_id: *entry_id
     archive_period:
       required: true
       example: 10
@@ -26,6 +40,7 @@ set_archive_period:
             - "120"
 set_rain_collector:
   fields:
+    entry_id: *entry_id
     rain_collector:
       required: true
       example: "0.2 mm"
@@ -37,6 +52,7 @@ set_rain_collector:
             - "0.1 mm"
 set_barometer_calibration:
   fields:
+    entry_id: *entry_id
     elevation:
       required: true
       example: 132
@@ -56,6 +72,7 @@ set_barometer_calibration:
           unit_of_measurement: "inHg"
 get_eeprom:
   fields:
+    entry_id: *entry_id
     address:
       required: true
       example: "2B"
@@ -70,6 +87,7 @@ get_eeprom:
           max: 256
 set_eeprom:
   fields:
+    entry_id: *entry_id
     address:
       required: true
       example: "2B"
@@ -82,9 +100,13 @@ set_eeprom:
         text:
 set_console_lamps:
   fields:
+    entry_id: *entry_id
     state:
       required: true
       example: true
       selector:
         boolean:
 clear_alarms:
+  fields:
+    entry_id: *entry_id
+

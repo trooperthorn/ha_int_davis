@@ -26,20 +26,19 @@ class TestConfigFlowStepsHaveTranslations:
         # The step_ids DavisVantageConfigFlow actually shows a form for.
         actual_step_ids = {
             "user",
-            "setup_serial",
-            "setup_network",
-            "setup_other_info",
-            "reconfigure_confirm",
+            "reconfigure",
+            "interface",
+            "verify",
+            "options",
         }
         translated_steps = set(load_translations()["config"]["step"].keys())
         missing = actual_step_ids - translated_steps
         assert not missing, f"translations/en.json is missing config steps: {missing}"
 
-    def test_setup_other_info_labels_the_fields_it_actually_asks_for(self):
-        data = load_translations()["config"]["step"]["setup_other_info"]["data"]
-        # vol.Schema fields in async_step_setup_other_info, per config_flow.py.
+    def test_options_step_labels_the_fields_it_actually_asks_for(self):
+        data = load_translations()["config"]["step"]["options"]["data"]
         for field in ("interval", "use_loop2", "persistent_connection"):
-            assert field in data, f"setup_other_info form field '{field}' has no label"
+            assert field in data, f"options form field '{field}' has no label"
 
     def test_options_flow_has_translations(self):
         # Regression: translations/en.json had no "options" key at all - the
@@ -49,6 +48,7 @@ class TestConfigFlowStepsHaveTranslations:
         init_data = options["step"]["init"]["data"]
         assert "use_loop2" in init_data
         assert "interval" in init_data
+        assert "persistent_connection" in init_data
 
 
 class TestStringsAndTranslationsStayInSync:
@@ -72,3 +72,4 @@ class TestStringsAndTranslationsStayInSync:
             load_translations().get("options", {}).get("step", {}).keys()
         )
         assert strings_options == translations_options
+

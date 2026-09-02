@@ -6,6 +6,7 @@ directly, without touching any serial I/O.
 """
 import asyncio
 import struct
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -13,6 +14,8 @@ import pytest
 
 from custom_components.davis_vantage.client import DavisVantageClient, LoopData2Parser
 from custom_components.davis_vantage.const import (
+    CONNECTION_CONNECTED,
+    CONNECTION_DEGRADED,
     PROTOCOL_NETWORK,
     PROTOCOL_SERIAL,
     RAIN_COLLECTOR_IMPERIAL,
@@ -26,6 +29,9 @@ class _FakeVantagePro2:
     data-transform logic and never touch serial I/O."""
 
     archive_period = 5
+
+    def __init__(self) -> None:
+        self.link = MagicMock()
 
 
 def make_client(**kwargs) -> DavisVantageClient:
@@ -73,6 +79,14 @@ class TestGetLink:
         # baud_rate=0/None must not produce "serial:...:0:8N1"
         client = make_client(protocol=PROTOCOL_SERIAL, link="/dev/ttyUSB0", baud_rate=0)
         assert client.get_link() == "serial:/dev/ttyUSB0:19200:8N1"
+
+    def test_weatherlink_tcp_is_released_even_when_persistent_is_requested(self):
+        client = make_client(
+            protocol=PROTOCOL_NETWORK,
+            link="192.168.1.50:22222",
+            persistent_connection=True,
+        )
+        assert client._should_close_after_transaction() is True
 
 
 class TestCorrectRainValues:
@@ -296,18 +310,20 @@ class TestAsyncClose:
     async def test_closes_link_when_connected(self):
         client = make_client()
         client._vantagepro2.link = MagicMock()
+        link = client._vantagepro2.link
 
-        await client.async_close()
+        assert await client.async_close() is True
 
-        client._vantagepro2.link.close.assert_called_once()
+        link.close.assert_called_once()
 
     async def test_close_error_is_caught_not_raised(self):
         client = make_client()
         client._vantagepro2.link = MagicMock()
         client._vantagepro2.link.close.side_effect = OSError("port already gone")
 
-        # Errors during shutdown must not prevent the unload from completing.
-        await client.async_close()
+        # A failed close is a controlled shutdown result and still stops the worker.
+        assert await client.async_close() is False
+        assert client._executor_shutdown is True
 
 
 class TestIoLockSerializesConcurrentAccess:
@@ -336,3 +352,73 @@ class TestIoLockSerializesConcurrentAccess:
         )
 
         assert overlap_detected is False
+        assert await client.async_close() is True
+
+
+class TestTransportOwnershipDuringCancellation:
+    async def test_cancelled_waiter_does_not_release_physical_worker(self):
+        client = make_client()
+        started = threading.Event()
+        release = threading.Event()
+        second_ran = False
+
+        def delayed_read():
+            started.set()
+            release.wait(timeout=2)
+
+        def second_operation():
+            nonlocal second_ran
+            second_ran = True
+
+        first = asyncio.create_task(client._async_run_io(delayed_read))
+        while not started.is_set():
+            await asyncio.sleep(0)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        second = asyncio.create_task(client._async_run_io(second_operation))
+        await asyncio.sleep(0.02)
+        assert second_ran is False
+        release.set()
+        await second
+        assert second_ran is True
+        assert await client.async_close() is True
+
+    async def test_unload_close_waits_for_delayed_read(self):
+        client = make_client()
+        started = threading.Event()
+        release = threading.Event()
+
+        def delayed_read():
+            started.set()
+            release.wait(timeout=2)
+
+        read_task = asyncio.create_task(client._async_run_io(delayed_read))
+        while not started.is_set():
+            await asyncio.sleep(0)
+        close_task = asyncio.create_task(client.async_close())
+        await asyncio.sleep(0.02)
+        assert close_task.done() is False
+        release.set()
+        await read_task
+        assert await close_task is True
+
+    async def test_failure_reconnects_before_the_next_transaction(self):
+        client = make_client()
+        client._vantagepro2.link = MagicMock()
+
+        def fail():
+            raise OSError("USB logger removed")
+
+        with pytest.raises(OSError):
+            await client._async_run_io(fail)
+        assert client.connection_diagnostics["state"] == CONNECTION_DEGRADED
+
+        assert await client._async_run_io(lambda: "recovered") == "recovered"
+        diagnostics = client.connection_diagnostics
+        assert diagnostics["state"] == CONNECTION_CONNECTED
+        assert diagnostics["reconnect_count"] == 1
+        assert diagnostics["failure_streak"] == 0
+        assert await client.async_close() is True
+

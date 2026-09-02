@@ -1,4 +1,4 @@
-name: Test
+name: Release gates
 
 on:
   push:
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.13"]
+        python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -25,5 +25,23 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v
 
+      - name: Lint
+        run: ruff check custom_components/davis_vantage tests
+
       - name: Type check
-        run: mypy custom_components/davis_vantage/
+        run: mypy --python-version 3.14 custom_components/davis_vantage/
+
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+

@@ -8,29 +8,34 @@
   "config": {
     "step": {
       "user": {
-        "title": "Davis Vantage Connection",
+        "title": "Connection method",
         "description": "Select how Home Assistant connects to your Davis Vantage console or WeatherLink logger.",
         "data": {
-          "protocol": "Protocol"
+          "protocol": "Connection method"
         }
       },
-      "setup_serial": {
-        "title": "Serial / USB Configuration",
-        "description": "Select the serial port connected to your Davis WeatherLink data logger.",
+      "reconfigure": {
+        "title": "Connection method",
+        "description": "Select the connection method to verify for this Davis entry.",
         "data": {
-          "link": "Device"
+          "protocol": "Connection method"
         }
       },
-      "setup_network": {
-        "title": "Network Configuration",
-        "description": "Enter the IP address and port for your WeatherLinkIP or network logger.",
+      "interface": {
+        "title": "Interface",
+        "description": "Select a Serial/USB interface or enter a WeatherLink host and port. Displaying this form does not open the interface.",
         "data": {
-          "link": "Host"
+          "link": "Interface"
         }
       },
-      "setup_other_info": {
-        "title": "Advanced Settings",
-        "description": "Configure polling behavior and protocol settings.",
+      "verify": {
+        "title": "Verify Davis console/logger",
+        "description": "Verified {endpoint}. Detected baud: **{baud}**. LOOP2 is **{loop2}**. Continue to Davis options.",
+        "data": {}
+      },
+      "options": {
+        "title": "Davis options",
+        "description": "Configure polling and connection lifecycle behavior.",
         "data": {
           "interval": "Interval",
           "use_loop2": "Enable LOOP2 Protocol",
@@ -38,14 +43,7 @@
         },
         "data_description": {
           "use_loop2": "Requests expanded LOOP2 data packets (LPS 2 1). Requires Vantage Pro2 or Vantage Vue console firmware v1.90 or newer. Leave disabled if you have older firmware or experience communication timeouts.",
-          "interval": "Time between console read cycles. Default is 300 seconds (5 min). Serial connections should not be polled faster than every 10–15 seconds to prevent bus contention."
-        }
-      },
-      "reconfigure_confirm": {
-        "description": "Update configuration for {name}.",
-        "data": {
-          "link": "Host",
-          "interval": "Interval"
+          "interval": "Time between console read cycles. Default is 30 seconds. Serial connections should not be polled faster than every 10–15 seconds to prevent bus contention."
         }
       }
     },
@@ -59,6 +57,8 @@
     },
     "abort": {
       "already_configured": "This Davis Vantage device is already configured.",
+      "identity_unavailable": "The existing entry has a strong hardware identity, but the submitted interface did not expose one.",
+      "wrong_device": "The submitted interface identifies a different Davis logger or console.",
       "reconfigure_successful": "Re-configuration was successful"
     }
   },
@@ -69,11 +69,13 @@
         "description": "Update station polling interval and protocol settings.",
         "data": {
           "use_loop2": "Enable LOOP2 Protocol",
-          "interval": "Polling Interval (seconds)"
+          "interval": "Polling Interval (seconds)",
+          "persistent_connection": "Persistent Connection"
         },
         "data_description": {
           "use_loop2": "Requires firmware v1.90+. Leave disabled if your console does not support LOOP2.",
-          "interval": "Polling frequency in seconds. Standard range is 30 to 300 seconds."
+          "interval": "Polling frequency in seconds.",
+          "persistent_connection": "Keep serial transports open between polls. WeatherLink TCP is still released after each transaction so cloud uploads are not starved."
         }
       }
     }
@@ -181,3 +183,4 @@
     }
   }
 }
+

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.davis_vantage.client import DavisVantageClient
-from custom_components.davis_vantage.const import PROTOCOL_SERIAL
+from custom_components.davis_vantage.const import DOMAIN, PROTOCOL_SERIAL
 from custom_components.davis_vantage.services import DavisServicesSetup
 
 
@@ -181,3 +181,43 @@ class TestConsoleServices:
         await services.clear_alarms(make_call())
 
         client.async_clear_alarms.assert_called_once()
+
+
+class TestMultipleEntryRouting:
+    def test_entry_id_selects_the_requested_transport_owner(self):
+        first_client = MagicMock()
+        second_client = MagicMock()
+        first = SimpleNamespace(
+            entry_id="first",
+            domain=DOMAIN,
+            runtime_data=SimpleNamespace(
+                coordinator=SimpleNamespace(client=first_client)
+            ),
+        )
+        second = SimpleNamespace(
+            entry_id="second",
+            domain=DOMAIN,
+            runtime_data=SimpleNamespace(
+                coordinator=SimpleNamespace(client=second_client)
+            ),
+        )
+        hass = MagicMock()
+        hass.config_entries.async_get_entry.return_value = second
+        hass.config_entries.async_entries.return_value = [first, second]
+        services = DavisServicesSetup.__new__(DavisServicesSetup)
+        services.hass = hass
+        services.config_entry = None
+
+        assert services._client_for_call(make_call(entry_id="second")) is second_client
+        hass.config_entries.async_get_entry.assert_called_once_with("second")
+
+    def test_multiple_entries_require_an_explicit_entry_id(self):
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [MagicMock(), MagicMock()]
+        services = DavisServicesSetup.__new__(DavisServicesSetup)
+        services.hass = hass
+        services.config_entry = None
+
+        with pytest.raises(ValueError, match="entry_id is required"):
+            services._entry_for_call(make_call())
+

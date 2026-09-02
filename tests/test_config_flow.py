@@ -1,172 +1,330 @@
-"""Integration tests for DavisVantageConfigFlow and its options flow.
+"""Config-flow and options-flow contract tests."""
 
-These exercise the flow against a real Home Assistant instance via
-pytest-homeassistant-custom-component, patching out the two things that
-would otherwise touch real hardware: pyserial (port enumeration + the
-fast wake/LOOP2 probe) and DavisVantageClient's connection methods.
-"""
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import SOURCE_RECONFIGURE
+from homeassistant.helpers.selector import SerialPortSelector
+
 from custom_components.davis_vantage.const import (
     CONFIG_BAUD_RATE,
+    CONFIG_IDENTITY,
+    CONFIG_IDENTITY_SOURCE,
+    CONFIG_IDENTITY_STRENGTH,
     CONFIG_INTERVAL,
     CONFIG_LINK,
+    CONFIG_LOOP2_SUPPORTED,
+    CONFIG_PERSISTENT_CONNECTION,
     CONFIG_PROTOCOL,
+    CONF_USE_LOOP2,
     DOMAIN,
+    IDENTITY_STRONG,
+    IDENTITY_WEAK,
     PROTOCOL_NETWORK,
     PROTOCOL_SERIAL,
+)
+from custom_components.davis_vantage.verification import (
+    DavisNotFoundError,
+    VerificationResult,
 )
 
 pytestmark = pytest.mark.asyncio
 
 
-def _no_ports():
-    return []
+def _verified(
+    protocol: str,
+    endpoint: str,
+    *,
+    identity: str = "usb:1234:5678:console-a",
+    strength: str = IDENTITY_STRONG,
+    loop2: bool = True,
+    baud: int | None = 19200,
+) -> VerificationResult:
+    return VerificationResult(
+        protocol=protocol,
+        endpoint=endpoint,
+        identity=identity,
+        identity_source=(
+            "usb_serial_number" if strength == IDENTITY_STRONG else "canonical_endpoint"
+        ),
+        identity_strength=strength,
+        loop2_supported=loop2,
+        baud_rate=baud if protocol == PROTOCOL_SERIAL else None,
+    )
 
 
-async def test_user_step_shows_protocol_choice(hass):
+async def _start_user_flow(hass, protocol: str):
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "user"}
     )
-    assert result["type"] == "form"
     assert result["step_id"] == "user"
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONFIG_PROTOCOL: protocol}
+    )
 
 
-async def test_serial_probe_success_flows_to_other_info_and_saves_serial_protocol(hass):
-    # Regression test: async_step_setup_other_info used to hardcode
-    # CONFIG_PROTOCOL = "Serial" no matter which path was taken. This nails
-    # down the serial path's expected (and previously also-correct-by-luck)
-    # outcome so a future regression on either path is caught.
-    mock_ser = MagicMock()
-    mock_ser.read.side_effect = [b"\n\r", b"\x06"]  # wake ACK, then LOOP2 ACK
-    mock_serial_ctx = MagicMock()
-    mock_serial_ctx.__enter__.return_value = mock_ser
-
+async def test_interface_form_uses_native_selector_without_probing(hass):
     with patch(
-        "serial.tools.list_ports.comports", side_effect=_no_ports
-    ), patch("serial.Serial", return_value=mock_serial_ctx):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": "user"}
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONFIG_PROTOCOL: PROTOCOL_SERIAL}
-        )
-        assert result["step_id"] == "setup_serial"
+        "custom_components.davis_vantage.config_flow.verify_connection"
+    ) as verify:
+        result = await _start_user_flow(hass, PROTOCOL_SERIAL)
 
+    assert result["step_id"] == "interface"
+    assert isinstance(next(iter(result["data_schema"].schema.values())), SerialPortSelector)
+    verify.assert_not_called()
+
+
+async def test_serial_flow_verifies_then_separates_data_and_options(hass):
+    verification = _verified(PROTOCOL_SERIAL, "/dev/serial/by-id/davis-a")
+    with patch(
+        "custom_components.davis_vantage.config_flow.verify_connection",
+        return_value=verification,
+    ) as verify:
+        result = await _start_user_flow(hass, PROTOCOL_SERIAL)
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONFIG_LINK: "/dev/ttyUSB0"}
         )
-        assert result["step_id"] == "setup_other_info"
-        # LOOP2 was detected by the probe, so the form should default it on.
-        assert result["data_schema"]({}).get("use_loop2") is True
-
+        assert result["step_id"] == "verify"
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        assert result["step_id"] == "options"
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONFIG_INTERVAL: 300, "use_loop2": True}
+            result["flow_id"],
+            {
+                CONFIG_INTERVAL: 60,
+                CONF_USE_LOOP2: True,
+                CONFIG_PERSISTENT_CONNECTION: True,
+            },
         )
 
+    verify.assert_called_once_with(PROTOCOL_SERIAL, "/dev/ttyUSB0")
     assert result["type"] == "create_entry"
-    assert result["data"][CONFIG_PROTOCOL] == PROTOCOL_SERIAL
-    assert result["data"][CONFIG_LINK] == "/dev/ttyUSB0"
-    assert result["data"][CONFIG_BAUD_RATE] == 19200
+    assert result["data"] == {
+        CONFIG_PROTOCOL: PROTOCOL_SERIAL,
+        CONFIG_LINK: "/dev/serial/by-id/davis-a",
+        CONFIG_IDENTITY: "usb:1234:5678:console-a",
+        CONFIG_IDENTITY_SOURCE: "usb_serial_number",
+        CONFIG_IDENTITY_STRENGTH: IDENTITY_STRONG,
+        CONFIG_LOOP2_SUPPORTED: True,
+        CONFIG_BAUD_RATE: 19200,
+    }
+    assert result["options"] == {
+        CONFIG_INTERVAL: 60,
+        CONF_USE_LOOP2: True,
+        CONFIG_PERSISTENT_CONNECTION: True,
+    }
 
 
-async def test_serial_probe_failure_shows_error_and_stays_on_form(hass):
-    mock_ser = MagicMock()
-    mock_ser.read.return_value = b""  # no ACK at any baud rate
-    mock_serial_ctx = MagicMock()
-    mock_serial_ctx.__enter__.return_value = mock_ser
-
+async def test_network_flow_preserves_weatherlink_transport(hass):
+    verification = _verified(
+        PROTOCOL_NETWORK,
+        "weatherlink.local:22222",
+        identity="network:weatherlink.local:22222",
+        strength=IDENTITY_WEAK,
+        loop2=False,
+    )
     with patch(
-        "serial.tools.list_ports.comports", side_effect=_no_ports
-    ), patch("serial.Serial", return_value=mock_serial_ctx):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": "user"}
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONFIG_PROTOCOL: PROTOCOL_SERIAL}
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONFIG_LINK: "/dev/ttyUSB0"}
-        )
-
-    assert result["type"] == "form"
-    assert result["step_id"] == "setup_serial"
-    assert result["errors"] == {"base": "no_davis_device"}
-
-
-async def test_network_setup_saves_network_protocol_not_serial(hass):
-    # Regression test for the hardcoded-"Serial" bug: a station configured
-    # over the network path must end up with CONFIG_PROTOCOL == "Network",
-    # otherwise get_link() builds a "serial:" URL for what the user told it
-    # was a TCP connection.
-    with patch(
-        "custom_components.davis_vantage.config_flow.DavisVantageClient.connect_to_station",
-        new=AsyncMock(return_value=None),
-    ), patch(
-        "custom_components.davis_vantage.config_flow.DavisVantageClient.async_get_davis_time",
-        new=AsyncMock(return_value=object()),
+        "custom_components.davis_vantage.config_flow.verify_connection",
+        return_value=verification,
     ):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": "user"}
-        )
+        result = await _start_user_flow(hass, PROTOCOL_NETWORK)
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONFIG_PROTOCOL: PROTOCOL_NETWORK}
+            result["flow_id"], {CONFIG_LINK: "WeatherLink.local"}
         )
-        assert result["step_id"] == "setup_network"
-
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONFIG_LINK: "192.168.1.50:22222"}
-        )
-        assert result["step_id"] == "setup_other_info"
-
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONFIG_INTERVAL: 300, "use_loop2": False}
+            result["flow_id"],
+            {
+                CONFIG_INTERVAL: 300,
+                CONF_USE_LOOP2: False,
+                CONFIG_PERSISTENT_CONNECTION: True,
+            },
         )
 
     assert result["type"] == "create_entry"
     assert result["data"][CONFIG_PROTOCOL] == PROTOCOL_NETWORK
-    assert result["data"][CONFIG_LINK] == "192.168.1.50:22222"
+    assert result["data"][CONFIG_LINK] == "weatherlink.local:22222"
+    assert CONFIG_BAUD_RATE not in result["data"]
 
 
-async def test_network_setup_validation_failure_shows_error(hass):
+async def test_only_submitted_interface_failure_returns_to_selector(hass):
     with patch(
-        "custom_components.davis_vantage.config_flow.DavisVantageClient.connect_to_station",
-        new=AsyncMock(side_effect=ConnectionError("no route to host")),
+        "custom_components.davis_vantage.config_flow.verify_connection",
+        side_effect=DavisNotFoundError,
+    ) as verify:
+        result = await _start_user_flow(hass, PROTOCOL_SERIAL)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONFIG_LINK: "socket://manual.example:2000"}
+        )
+
+    verify.assert_called_once_with(PROTOCOL_SERIAL, "socket://manual.example:2000")
+    assert result["step_id"] == "interface"
+    assert result["errors"] == {"base": "no_davis_device"}
+
+
+async def test_duplicate_strong_console_is_rejected(hass):
+    existing = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="davis:usb:1234:5678:console-a",
+        data={
+            CONFIG_PROTOCOL: PROTOCOL_SERIAL,
+            CONFIG_LINK: "/dev/serial/by-id/davis-a",
+            CONFIG_IDENTITY: "usb:1234:5678:console-a",
+        },
+        options={},
+        version=2,
+    )
+    existing.add_to_hass(hass)
+
+    with patch(
+        "custom_components.davis_vantage.config_flow.verify_connection",
+        return_value=_verified(PROTOCOL_SERIAL, "COM7"),
     ):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": "user"}
-        )
+        result = await _start_user_flow(hass, PROTOCOL_SERIAL)
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONFIG_PROTOCOL: PROTOCOL_NETWORK}
+            result["flow_id"], {CONFIG_LINK: "COM7"}
         )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONFIG_LINK: "10.0.0.5:22222"}
+            result["flow_id"],
+            {
+                CONFIG_INTERVAL: 30,
+                CONF_USE_LOOP2: True,
+                CONFIG_PERSISTENT_CONNECTION: False,
+            },
         )
 
-    assert result["type"] == "form"
-    assert result["step_id"] == "setup_network"
-    assert result["errors"] == {"base": "cannot_connect"}
+    assert result["type"] == "abort"
+    assert result["reason"] == "already_configured"
 
 
-async def test_options_flow_round_trip(hass):
+async def test_reconfigure_rejects_a_different_physical_console(hass):
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONFIG_PROTOCOL: PROTOCOL_SERIAL, CONFIG_LINK: "/dev/ttyUSB0"},
+        unique_id="davis:usb:1234:5678:console-a",
+        data={
+            CONFIG_PROTOCOL: PROTOCOL_SERIAL,
+            CONFIG_LINK: "COM3",
+            CONFIG_IDENTITY: "usb:1234:5678:console-a",
+            CONFIG_IDENTITY_SOURCE: "usb_serial_number",
+            CONFIG_IDENTITY_STRENGTH: IDENTITY_STRONG,
+            CONFIG_LOOP2_SUPPORTED: True,
+            CONFIG_BAUD_RATE: 19200,
+        },
+        options={CONFIG_INTERVAL: 30},
+        version=2,
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id},
+        data=entry.data,
+    )
+    if result["step_id"] == "reconfigure":
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONFIG_PROTOCOL: PROTOCOL_SERIAL}
+        )
+    assert result["step_id"] == "interface"
+    with patch(
+        "custom_components.davis_vantage.config_flow.verify_connection",
+        return_value=_verified(
+            PROTOCOL_SERIAL,
+            "COM4",
+            identity="usb:1234:5678:console-b",
+        ),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONFIG_LINK: "COM4"}
+        )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "wrong_device"
+    assert entry.data[CONFIG_LINK] == "COM3"
+
+
+async def test_network_reconfigure_updates_once_and_preserves_options(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="davis:generated:entry-a",
+        data={
+            CONFIG_PROTOCOL: PROTOCOL_SERIAL,
+            CONFIG_LINK: "COM3",
+            CONFIG_IDENTITY: "generated:entry-a",
+            CONFIG_IDENTITY_SOURCE: "generated",
+            CONFIG_IDENTITY_STRENGTH: IDENTITY_WEAK,
+            CONFIG_LOOP2_SUPPORTED: False,
+            CONFIG_BAUD_RATE: 19200,
+        },
+        options={
+            CONFIG_INTERVAL: 60,
+            CONF_USE_LOOP2: False,
+            CONFIG_PERSISTENT_CONNECTION: True,
+        },
+        version=2,
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONFIG_PROTOCOL: PROTOCOL_NETWORK}
+    )
+    with patch(
+        "custom_components.davis_vantage.config_flow.verify_connection",
+        return_value=_verified(
+            PROTOCOL_NETWORK,
+            "logger.local:22222",
+            identity="network:logger.local:22222",
+            strength=IDENTITY_WEAK,
+            loop2=True,
+        ),
+    ), patch.object(hass.config_entries, "async_reload") as reload_entry:
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONFIG_LINK: "LOGGER.local"}
+        )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data[CONFIG_PROTOCOL] == PROTOCOL_NETWORK
+    assert entry.data[CONFIG_LINK] == "logger.local:22222"
+    assert CONFIG_BAUD_RATE not in entry.data
+    assert entry.options[CONFIG_INTERVAL] == 60
+    reload_entry.assert_not_called()
+
+
+async def test_options_flow_owns_all_runtime_tuning_values(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONFIG_PROTOCOL: PROTOCOL_SERIAL,
+            CONFIG_LINK: "COM3",
+            CONFIG_LOOP2_SUPPORTED: True,
+        },
         options={},
-        title="Davis Vantage (test)",
+        version=2,
     )
     entry.add_to_hass(hass)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["type"] == "form"
-    assert result["step_id"] == "init"
-
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {CONFIG_INTERVAL: 60, "use_loop2": True}
+        result["flow_id"],
+        {
+            CONFIG_INTERVAL: 60,
+            CONF_USE_LOOP2: True,
+            CONFIG_PERSISTENT_CONNECTION: True,
+        },
     )
 
     assert result["type"] == "create_entry"
-    assert result["data"] == {CONFIG_INTERVAL: 60, "use_loop2": True}
+    assert result["data"] == {
+        CONFIG_INTERVAL: 60,
+        CONF_USE_LOOP2: True,
+        CONFIG_PERSISTENT_CONNECTION: True,
+    }
+

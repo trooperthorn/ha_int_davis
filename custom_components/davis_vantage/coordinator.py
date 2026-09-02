@@ -33,11 +33,8 @@ class DavisVantageDataUpdateCoordinator(DataUpdateCoordinator):
         config_entry: config_entries.ConfigEntry
     ) -> None:
         """Initialize."""
-        # Grab interval safely from options, falling back to data, defaulting to 300
-        interval = config_entry.options.get(
-            "interval", 
-            config_entry.data.get("interval", 300)
-        )
+        # Runtime tuning has one owner: ConfigEntry.options.
+        interval = config_entry.options.get("interval", 30)
 
         super().__init__(
             hass,
@@ -53,6 +50,11 @@ class DavisVantageDataUpdateCoordinator(DataUpdateCoordinator):
         self.device_info = device_info
         self.config_entry = config_entry
         self._consecutive_failures = 0
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Expose the availability streak for diagnostics."""
+        return self._consecutive_failures
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Update data via library with HA startup safeguards."""
@@ -125,3 +127,4 @@ class DavisVantageDataUpdateCoordinator(DataUpdateCoordinator):
                     "name": self.config_entry.title if self.config_entry else "Davis Vantage"
                 },
             )
+

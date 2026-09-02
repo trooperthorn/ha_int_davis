@@ -1,351 +1,372 @@
+"""Config and options flows for Davis Vantage."""
+
+from __future__ import annotations
+
 import logging
 from typing import Any
+from uuid import uuid4
 
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import selector
+from homeassistant.core import callback
+from homeassistant.data_entry_flow import AbortFlow
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SerialPortSelector,
+    TextSelector,
+)
 
-from .client import DavisVantageClient
 from .const import (
     CONFIG_BAUD_RATE,
+    CONFIG_IDENTITY,
+    CONFIG_IDENTITY_SOURCE,
+    CONFIG_IDENTITY_STRENGTH,
     CONFIG_INTERVAL,
     CONFIG_LINK,
+    CONFIG_LOOP2_SUPPORTED,
     CONFIG_MINIMAL_INTERVAL,
     CONFIG_PERSISTENT_CONNECTION,
     CONFIG_PROTOCOL,
-    DEFAULT_BAUD_RATE,
+    CONF_USE_LOOP2,
     DEFAULT_SYNC_INTERVAL,
     DOMAIN,
-    NAME,
+    IDENTITY_STRONG,
     PROTOCOL_NETWORK,
     PROTOCOL_SERIAL,
-    SUPPORTED_BAUD_RATES,
+)
+from .verification import (
+    DavisCannotConnectError,
+    DavisNotFoundError,
+    VerificationResult,
+    verify_connection,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-
-async def _async_list_serial_ports(hass: HomeAssistant) -> list[selector.SelectOptionDict]:
-    """Enumerate available serial ports for the port-picker dropdown.
-
-    There is no "SerialPortSelector" in Home Assistant core - that never
-    existed. This is the actual standard pattern: enumerate ports with
-    pyserial and offer them as a SelectSelector, with custom_value=True so a
-    port that isn't auto-detected (e.g. inside some containers) can still be
-    typed in by hand.
-    """
-    from serial.tools.list_ports import comports
-
-    ports = await hass.async_add_executor_job(comports)
-    options = [
-        selector.SelectOptionDict(
-            value=port.device,
-            label=f"{port.device} - {port.description}" if port.description else port.device,
-        )
-        for port in sorted(ports, key=lambda p: p.device)
-    ]
-    return options
-
-
-# Schema used for reconfiguring an existing integration entry
-RECONFIGURE_SCHEMA = vol.Schema(
+CONNECTION_SCHEMA = vol.Schema(
     {
-        vol.Required(CONFIG_LINK): str,
-        # LOOP 2 enable when working
-#        vol.Optional("use_loop2", default=False): bool,
-        vol.Required(CONFIG_INTERVAL, default=DEFAULT_SYNC_INTERVAL): vol.All(
-            int, vol.Range(min=CONFIG_MINIMAL_INTERVAL)
-        ),
+        vol.Required(CONFIG_PROTOCOL): SelectSelector(
+            SelectSelectorConfig(options=[PROTOCOL_SERIAL, PROTOCOL_NETWORK])
+        )
     }
 )
 
-class PlaceholderHub:
-    """Test connection to the Davis Weather Station."""
 
-    def __init__(self, hass: HomeAssistant) -> None:
-        """Initialize."""
-        self._hass = hass
-
-    async def authenticate(self, protocol: str, link: str) -> bool:
-        """Test if we can connect to the station via the provided link."""
-        client = DavisVantageClient(self._hass, protocol, link, False)
-        try:
-            await client.connect_to_station()
-            davis_time = await client.async_get_davis_time()
-            return davis_time is not None
-        except Exception as err:
-            # Logs raw error output ONLY on failure
-            _LOGGER.error(
-                "Failed to connect to Davis station on %s://%s. Raw error: %s",
-                protocol,
-                link,
-                repr(err),
-            )
-            return False
-
-
-async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
-    """Validate the user input allows us to connect."""
-    hub = PlaceholderHub(hass)
-    if not await hub.authenticate(data[CONFIG_PROTOCOL], data[CONFIG_LINK]):
-        raise CannotConnect
-
-    return {"title": f"Davis Vantage ({data[CONFIG_LINK]})"}
+def _options_schema(
+    *, interval: int, use_loop2: bool, persistent_connection: bool
+) -> vol.Schema:
+    """Build the single owner for runtime-tuning settings."""
+    return vol.Schema(
+        {
+            vol.Required(CONFIG_INTERVAL, default=interval): vol.All(
+                int, vol.Range(min=CONFIG_MINIMAL_INTERVAL, max=1800)
+            ),
+            vol.Optional(CONF_USE_LOOP2, default=use_loop2): bool,
+            vol.Optional(
+                CONFIG_PERSISTENT_CONNECTION, default=persistent_connection
+            ): bool,
+        }
+    )
 
 
 class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Davis Vantage."""
 
-    VERSION = 1
+    VERSION = 2
+
     protocol: str
     link: str
+    verification: VerificationResult | None = None
+    _is_reconfigure = False
+    _reconfigure_started = False
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial protocol selection step."""
+        """Choose Serial/USB or WeatherLink network transport."""
         if user_input is not None:
             self.protocol = user_input[CONFIG_PROTOCOL]
-            if self.protocol == PROTOCOL_SERIAL:
-                return await self.async_step_setup_serial()
-
-            return await self.async_step_setup_network()
-
-        list_of_types = [PROTOCOL_SERIAL, PROTOCOL_NETWORK]
-        schema = vol.Schema({vol.Required(CONFIG_PROTOCOL): vol.In(list_of_types)})
-        return self.async_show_form(step_id="user", data_schema=schema)
-
-    async def async_step_setup_serial(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Handle selecting a serial USB port."""
-        errors = {}
-
-        if user_input is not None:
-            self.link = user_input[CONFIG_LINK]
-
-            # --- FAST PROBE FOR INSTANT FEEDBACK, BAUD NEGOTIATION & LOOP 2 DISCOVERY ---
-            def wake_console(ser) -> bool:
-                import time
-                ser.write(b"\n")
-                time.sleep(0.1)
-                if ser.read(2) == b"\n\r":
-                    return True
-                # Davis consoles sometimes need a second wake-up call if deeply asleep
-                ser.write(b"\n")
-                time.sleep(0.1)
-                return ser.read(2) == b"\n\r"
-
-            def fast_probe_davis(port: str) -> tuple[bool, bool, int]:
-                """Probe the port, negotiating the console's current baud rate.
-
-                Tries the default (fastest) baud first, then falls back through
-                the other console-supported rates so setup works whether or not
-                the console has previously been reconfigured to a slower rate.
-                """
-                import serial
-                import time
-
-                for baud_rate in SUPPORTED_BAUD_RATES:
-                    try:
-                        with serial.Serial(port, baud_rate, timeout=2) as ser:
-                            if not wake_console(ser):
-                                continue
-
-                            # Test LOOP 2 support instantly
-                            ser.write(b"LPS 2 1\n")
-                            time.sleep(0.1)
-                            ack = ser.read(1)
-                            loop2_supported = ack == b"\x06"
-
-                            return True, loop2_supported, baud_rate
-                    except Exception:
-                        continue
-
-                return False, False, DEFAULT_BAUD_RATE
-
-            # Run the fast probe without blocking Home Assistant
-            success, loop2_supported, baud_rate = await self.hass.async_add_executor_job(
-                fast_probe_davis, self.link
-            )
-
-            if success:
-                # Save the discovered capabilities to the class instance
-                self.loop2_supported = loop2_supported
-                self.baud_rate = baud_rate
-                return await self.async_step_setup_other_info()
-            else:
-                # Instantly throw the specific error!
-                _LOGGER.warning("Connection test failed on %s: BAD ACK.", self.link)
-                errors["base"] = "no_davis_device"
-            # ---------------------------------------------------------
-
-        ports = await _async_list_serial_ports(self.hass)
-        step_user_data_schema = vol.Schema(
-            {
-                vol.Required(CONFIG_LINK): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=ports,
-                        custom_value=True,
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                    )
-                )
-            }
-        )
-
-        return self.async_show_form(
-            step_id="setup_serial", data_schema=step_user_data_schema, errors=errors
-        )
-
-    async def async_step_setup_network(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Handle network connection details."""
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            self.link = user_input[CONFIG_LINK]
-            try:
-                await validate_input(
-                    self.hass, {CONFIG_PROTOCOL: self.protocol, CONFIG_LINK: self.link}
-                )
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected exception validating network connection")
-                errors["base"] = "unknown"
-            else:
-                return await self.async_step_setup_other_info()
-
-        step_user_data_schema = vol.Schema({vol.Required(CONFIG_LINK): str})
-
-        return self.async_show_form(
-            step_id="setup_network", data_schema=step_user_data_schema, errors=errors
-        )
-
-    async def async_step_setup_other_info(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Handle additional settings after successful connection."""
-        if user_input is not None:
-            user_input[CONFIG_LINK] = getattr(self, "link", "")
-            user_input[CONFIG_PROTOCOL] = getattr(self, "protocol", PROTOCOL_SERIAL)
-            user_input[CONFIG_BAUD_RATE] = getattr(self, "baud_rate", DEFAULT_BAUD_RATE)
-            return self.async_create_entry(title="Davis Vantage", data=user_input)
-
-        auto_loop2 = getattr(self, "loop2_supported", False)
-
-        step_user_data_schema = vol.Schema(
-            {
-                # Set minimum to 30 seconds and maximum to 300 seconds
-                vol.Required(CONFIG_INTERVAL, default=300): vol.All(
-                    int, vol.Range(min=30, max=1800)
-                ),
-                vol.Optional("use_loop2", default=auto_loop2): bool,
-                vol.Optional(CONFIG_PERSISTENT_CONNECTION, default=False): bool,
-            }
-        )
-
-        return self.async_show_form(
-            step_id="setup_other_info", data_schema=step_user_data_schema
-        )
+            return await self.async_step_interface()
+        return self.async_show_form(step_id="user", data_schema=CONNECTION_SCHEMA)
 
     async def async_step_reconfigure(
-        self, _: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Handle a reconfiguration flow initialized by the user."""
-        self.entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
-        return await self.async_step_reconfigure_confirm()
-
-    async def async_step_reconfigure_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Confirm reconfiguration changes."""
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            self.hass.config_entries.async_update_entry(
-                self.entry, data=self.entry.data | user_input  # type: ignore
-            )
-            await self.hass.config_entries.async_reload(self.entry.entry_id)  # type: ignore
-            return self.async_abort(reason="reconfigure_successful")
-
-        step_user_data_schema = RECONFIGURE_SCHEMA
-        if self.entry.data.get(CONFIG_PROTOCOL) == PROTOCOL_SERIAL:  # type: ignore
-            ports = await _async_list_serial_ports(self.hass)
-            step_user_data_schema = RECONFIGURE_SCHEMA.extend(
-                {
-                    vol.Required(CONFIG_LINK): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=ports,
-                            custom_value=True,
-                            mode=selector.SelectSelectorMode.DROPDOWN,
-                        )
-                    )
-                },
-                required=True,
-            )
-
+        """Start a transport-aware reconfigure flow."""
+        self._is_reconfigure = True
+        entry = self._get_reconfigure_entry()
+        if self._reconfigure_started and user_input is not None:
+            self.protocol = user_input[CONFIG_PROTOCOL]
+            return await self.async_step_interface()
+        self._reconfigure_started = True
         return self.async_show_form(
-            step_id="reconfigure_confirm",
+            step_id="reconfigure",
             data_schema=self.add_suggested_values_to_schema(
-                data_schema=step_user_data_schema,
-                suggested_values=self.entry.data | (user_input or {}),  # type: ignore
+                CONNECTION_SCHEMA,
+                {CONFIG_PROTOCOL: entry.data.get(CONFIG_PROTOCOL, PROTOCOL_SERIAL)},
             ),
-            description_placeholders={"name": self.entry.title},  # type: ignore
+        )
+
+    async def async_step_interface(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Select one interface without opening it while the form is displayed."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self.link = user_input[CONFIG_LINK]
+            self.verification = None
+            return await self.async_step_verify()
+
+        suggested_link = ""
+        if self._is_reconfigure:
+            suggested_link = str(
+                self._get_reconfigure_entry().data.get(CONFIG_LINK, "")
+            )
+        field = (
+            SerialPortSelector()
+            if self.protocol == PROTOCOL_SERIAL
+            else TextSelector()
+        )
+        schema = vol.Schema({vol.Required(CONFIG_LINK): field})
+        return self.async_show_form(
+            step_id="interface",
+            data_schema=self.add_suggested_values_to_schema(
+                schema, {CONFIG_LINK: suggested_link}
+            ),
             errors=errors,
         )
-    
+
+    async def async_step_verify(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Verify only the submitted interface and show the detected capabilities."""
+        if self.verification is None:
+            try:
+                self.verification = await self.hass.async_add_executor_job(
+                    verify_connection, self.protocol, self.link
+                )
+            except DavisNotFoundError:
+                return self.async_show_form(
+                    step_id="interface",
+                    data_schema=vol.Schema(
+                        {
+                            vol.Required(CONFIG_LINK, default=self.link): (
+                                SerialPortSelector()
+                                if self.protocol == PROTOCOL_SERIAL
+                                else TextSelector()
+                            )
+                        }
+                    ),
+                    errors={"base": "no_davis_device"},
+                )
+            except DavisCannotConnectError:
+                return self.async_show_form(
+                    step_id="interface",
+                    data_schema=vol.Schema(
+                        {
+                            vol.Required(CONFIG_LINK, default=self.link): (
+                                SerialPortSelector()
+                                if self.protocol == PROTOCOL_SERIAL
+                                else TextSelector()
+                            )
+                        }
+                    ),
+                    errors={"base": "cannot_connect"},
+                )
+            except Exception:
+                _LOGGER.exception("Unexpected exception verifying Davis interface")
+                return self.async_show_form(
+                    step_id="interface",
+                    data_schema=vol.Schema(
+                        {
+                            vol.Required(CONFIG_LINK, default=self.link): (
+                                SerialPortSelector()
+                                if self.protocol == PROTOCOL_SERIAL
+                                else TextSelector()
+                            )
+                        }
+                    ),
+                    errors={"base": "unknown"},
+                )
+
+        if user_input is not None:
+            if self._is_reconfigure:
+                return await self._async_finish_reconfigure()
+            return await self.async_step_options()
+
+        return self.async_show_form(
+            step_id="verify",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "endpoint": self.verification.endpoint,
+                "baud": (
+                    str(self.verification.baud_rate)
+                    if self.verification.baud_rate is not None
+                    else "not applicable"
+                ),
+                "loop2": "supported" if self.verification.loop2_supported else "not supported",
+            },
+        )
+
+    async def async_step_options(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Collect runtime options after successful verification."""
+        assert self.verification is not None
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if user_input.get(CONF_USE_LOOP2) and not self.verification.loop2_supported:
+                errors["base"] = "unsupported_loop2"
+            else:
+                identity = self.verification.identity
+                source = self.verification.identity_source
+                strength = self.verification.identity_strength
+                if strength != IDENTITY_STRONG:
+                    identity = f"generated:{uuid4()}"
+                    source = "generated"
+                unique_id = f"davis:{identity}"
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_configured()
+                self._async_abort_entries_match(
+                    {
+                        CONFIG_PROTOCOL: self.verification.protocol,
+                        CONFIG_LINK: self.verification.endpoint,
+                    }
+                )
+                data = self._connection_data(identity, source, strength)
+                return self.async_create_entry(
+                    title=f"Davis Vantage ({self.verification.endpoint})",
+                    data=data,
+                    options=dict(user_input),
+                )
+
+        return self.async_show_form(
+            step_id="options",
+            data_schema=_options_schema(
+                interval=DEFAULT_SYNC_INTERVAL,
+                use_loop2=self.verification.loop2_supported,
+                persistent_connection=False,
+            ),
+            errors=errors,
+        )
+
+    def _connection_data(
+        self, identity: str, identity_source: str, identity_strength: str
+    ) -> dict[str, Any]:
+        """Build config-entry data without duplicating options."""
+        assert self.verification is not None
+        data: dict[str, Any] = {
+            CONFIG_PROTOCOL: self.verification.protocol,
+            CONFIG_LINK: self.verification.endpoint,
+            CONFIG_IDENTITY: identity,
+            CONFIG_IDENTITY_SOURCE: identity_source,
+            CONFIG_IDENTITY_STRENGTH: identity_strength,
+            CONFIG_LOOP2_SUPPORTED: self.verification.loop2_supported,
+        }
+        if self.verification.baud_rate is not None:
+            data[CONFIG_BAUD_RATE] = self.verification.baud_rate
+        return data
+
+    async def _async_finish_reconfigure(self) -> ConfigFlowResult:
+        """Validate identity, update once, and let the update listener reload."""
+        assert self.verification is not None
+        entry = self._get_reconfigure_entry()
+        old_strength = entry.data.get(CONFIG_IDENTITY_STRENGTH)
+        new_strength = self.verification.identity_strength
+        identity = entry.data.get(CONFIG_IDENTITY, self.verification.identity)
+        source = entry.data.get(CONFIG_IDENTITY_SOURCE, "generated")
+        unique_id = entry.unique_id
+
+        if old_strength == IDENTITY_STRONG:
+            if new_strength != IDENTITY_STRONG:
+                return self.async_abort(reason="identity_unavailable")
+            new_unique_id = f"davis:{self.verification.identity}"
+            await self.async_set_unique_id(new_unique_id)
+            self._abort_if_unique_id_mismatch(reason="wrong_device")
+            identity = self.verification.identity
+            source = self.verification.identity_source
+            unique_id = new_unique_id
+        elif new_strength == IDENTITY_STRONG:
+            new_unique_id = f"davis:{self.verification.identity}"
+            for other in self._async_current_entries():
+                if other.entry_id != entry.entry_id and other.unique_id == new_unique_id:
+                    raise AbortFlow("already_configured")
+            identity = self.verification.identity
+            source = self.verification.identity_source
+            unique_id = new_unique_id
+
+        for other in self._async_current_entries():
+            if (
+                other.entry_id != entry.entry_id
+                and other.data.get(CONFIG_PROTOCOL) == self.verification.protocol
+                and other.data.get(CONFIG_LINK) == self.verification.endpoint
+            ):
+                raise AbortFlow("already_configured")
+
+        preserved = {
+            key: value
+            for key, value in entry.data.items()
+            if key
+            not in {
+                CONFIG_PROTOCOL,
+                CONFIG_LINK,
+                CONFIG_BAUD_RATE,
+                CONFIG_IDENTITY,
+                CONFIG_IDENTITY_SOURCE,
+                CONFIG_IDENTITY_STRENGTH,
+                CONFIG_LOOP2_SUPPORTED,
+                CONFIG_INTERVAL,
+                CONF_USE_LOOP2,
+                CONFIG_PERSISTENT_CONNECTION,
+            }
+        }
+        data = preserved | self._connection_data(identity, source, new_strength)
+        return self.async_update_and_abort(
+            entry,
+            unique_id=unique_id,
+            title=f"Davis Vantage ({self.verification.endpoint})",
+            data=data,
+        )
+
     @staticmethod
     @callback
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
-        """Tell Home Assistant to use our Options Flow handler."""
+        """Return the Davis options flow."""
         return DavisVantageOptionsFlowHandler()
 
 
 class DavisVantageOptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle Options Flow for Davis Vantage."""
+    """Manage the three runtime-owned options."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage the options."""
+        """Manage options."""
+        errors: dict[str, str] = {}
+        loop2_supported = bool(
+            self.config_entry.data.get(CONFIG_LOOP2_SUPPORTED, False)
+        )
         if user_input is not None:
-            # When the user clicks Submit, save the new options
-            return self.async_create_entry(title="", data=user_input)
+            if user_input.get(CONF_USE_LOOP2) and not loop2_supported:
+                errors["base"] = "unsupported_loop2"
+            else:
+                return self.async_create_entry(title="", data=user_input)
 
-        # Grab the current settings to populate the form defaults. 
-        # (self.config_entry still works below because HA injects it dynamically!)
-        current_loop2 = self.config_entry.options.get(
-            "use_loop2", self.config_entry.data.get("use_loop2", False)
-        )
-        current_interval = self.config_entry.options.get(
-            CONFIG_INTERVAL, self.config_entry.data.get(CONFIG_INTERVAL, DEFAULT_SYNC_INTERVAL)
-        )
-
-        # Build the Configure form
-        options_schema = vol.Schema(
-            {
-                vol.Optional("use_loop2", default=current_loop2): bool,
-                vol.Required(CONFIG_INTERVAL, default=current_interval): vol.All(
-                    int, vol.Range(min=CONFIG_MINIMAL_INTERVAL)
-                ),
-            }
-        )
-
+        options = self.config_entry.options
         return self.async_show_form(
-            step_id="init", data_schema=options_schema
+            step_id="init",
+            data_schema=_options_schema(
+                interval=options.get(CONFIG_INTERVAL, DEFAULT_SYNC_INTERVAL),
+                use_loop2=options.get(CONF_USE_LOOP2, False),
+                persistent_connection=options.get(
+                    CONFIG_PERSISTENT_CONNECTION, False
+                ),
+            ),
+            errors=errors,
         )
 
-class CannotConnect(HomeAssistantError):
-    """Error to indicate we cannot connect."""
-
-
-class InvalidAuth(HomeAssistantError):
-    """Error to indicate invalid authentication."""

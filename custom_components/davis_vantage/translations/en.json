@@ -8,6 +8,8 @@
     "config": {
         "abort": {
             "already_configured": "Device is already configured",
+            "identity_unavailable": "The existing entry has a strong hardware identity, but the submitted interface did not expose one.",
+            "wrong_device": "The submitted interface identifies a different Davis logger or console.",
             "reconfigure_successful": "Re-configuration was successful"
         },
         "error": {
@@ -21,20 +23,25 @@
         "step": {
             "user": {
                 "data": {
-                    "protocol": "Protocol"
+                    "protocol": "Connection method"
                 }
             },
-            "setup_serial": {
+            "reconfigure": {
                 "data": {
-                    "link": "Device"
+                    "protocol": "Connection method"
                 }
             },
-            "setup_network": {
+            "interface": {
                 "data": {
-                    "link": "Host"
+                    "link": "Interface"
                 }
             },
-            "setup_other_info": {
+            "verify": {
+                "title": "Verify Davis console/logger",
+                "description": "Verified {endpoint}. Detected baud: **{baud}**. LOOP2 is **{loop2}**. Continue to Davis options.",
+                "data": {}
+            },
+            "options": {
                 "data": {
                     "interval": "Interval",
                     "use_loop2": "Enable LOOP2 Protocol",
@@ -42,13 +49,6 @@
                 },
                 "data_description": {
                     "use_loop2": "Requests expanded LOOP2 data packets (LPS 2 1). Requires Vantage Pro2 or Vantage Vue console firmware v1.90 or newer. Leave disabled if you have older firmware or experience communication timeouts."
-                }
-            },
-            "reconfigure_confirm": {
-                "description": "Update configuration for {name}.",
-                "data": {
-                    "link": "Host",
-                    "interval": "Interval"
                 }
             }
         }
@@ -60,11 +60,13 @@
                 "description": "Update station polling interval and protocol settings.",
                 "data": {
                     "use_loop2": "Enable LOOP2 Protocol",
-                    "interval": "Polling Interval (seconds)"
+                    "interval": "Polling Interval (seconds)",
+                    "persistent_connection": "Persistent Connection"
                 },
                 "data_description": {
                     "use_loop2": "Requires firmware v1.90+. Leave disabled if your console does not support LOOP2.",
-                    "interval": "Polling frequency in seconds. Standard range is 30 to 300 seconds."
+                    "interval": "Polling frequency in seconds.",
+                    "persistent_connection": "Keep serial transports open between polls. WeatherLink TCP is still released after each transaction so cloud uploads are not starved."
                 }
             }
         }
@@ -706,3 +708,4 @@
         }
     }
 }
+
