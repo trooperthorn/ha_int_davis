@@ -188,6 +188,11 @@ def _read_exact(transport: _ProbeTransport, size: int, timeout: float) -> bytes:
         chunk = transport.read(size - len(chunks))
         if chunk:
             chunks.extend(chunk)
+        else:
+            # A transport with a real timeout blocks inside read() above, but
+            # a non-blocking one (read() returns b"" immediately) would spin
+            # this loop at full CPU for the whole deadline otherwise.
+            time.sleep(0.01)
     return bytes(chunks)
 
 
