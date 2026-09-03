@@ -120,8 +120,6 @@ async def async_setup_entry(
     hass: HomeAssistant, config_entry: DavisConfigEntry
 ) -> bool:
     """Set up Davis Vantage from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
-
     _LOGGER.debug("Setting up entry %s with data: %s", config_entry.entry_id, config_entry.data)
     _LOGGER.debug("Entry options: %s", config_entry.options)
 
@@ -198,7 +196,6 @@ async def async_setup_entry(
 
     # 6. Store references
     config_entry.runtime_data = RuntimeData(coordinator=coordinator)
-    hass.data[DOMAIN][config_entry.entry_id] = coordinator
 
     # 7. Forward setup to sensor, binary_sensor, and weather platforms
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
@@ -233,9 +230,6 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry
         # Don't leave a stale "connection lost" repair issue behind if the
         # user removes the integration while one is open.
         ir.async_delete_issue(hass, DOMAIN, "connection_lost")
-
-        # Clean up legacy dictionary reference
-        hass.data[DOMAIN].pop(config_entry.entry_id, None)
 
     return unload_ok
 
