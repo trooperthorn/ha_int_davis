@@ -20,7 +20,17 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install test dependencies
-        run: pip install -r requirements_test.txt
+        # The released HA pytest fixture package currently declares the 2026.9
+        # beta. Install its fixtures first, then enforce the stable HA runtime
+        # and serialx versions exercised by this integration.
+        run: |
+          pip install pytest-homeassistant-custom-component==0.13.362
+          pip install -r requirements_test.txt
+
+      - name: Verify runtime dependency versions
+        run: |
+          python -c "from importlib.metadata import version; assert version('homeassistant') == '2026.9.0'"
+          python -c "from importlib.metadata import version; assert version('serialx') == '1.9.0'"
 
       - name: Run tests
         run: pytest tests/ -v
