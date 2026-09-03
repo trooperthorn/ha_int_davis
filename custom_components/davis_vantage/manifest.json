@@ -1,16 +1,20 @@
 {
   "domain": "davis_vantage",
   "name": "Davis Vantage Weather",
-  "codeowners": ["@trooperthorn"],
+  "codeowners": [
+    "@trooperthorn"
+  ],
   "config_flow": true,
-  "dependencies": ["usb"],
+  "dependencies": [
+    "usb"
+  ],
   "documentation": "https://github.com/trooperthorn/ha_int_davis",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/trooperthorn/ha_int_davis/issues",
-    "requirements": [
-        "PyVantagePro@https://github.com/trooperthorn/PyVantagePro/archive/3ff12a6820a25c2458351a16b191da5843e78a63.zip",
-        "serialx==1.9.0",
-        "pyserial==3.5"
-    ],
-  "version": "2026.09.02"
+  "requirements": [
+    "PyVantagePro@https://github.com/trooperthorn/PyVantagePro/archive/3ff12a6820a25c2458351a16b191da5843e78a63.zip",
+    "serialx==1.9.0",
+    "pyserial==3.5"
+  ],
+  "version": "2026.09.03.1"
 }
