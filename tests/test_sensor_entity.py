@@ -76,6 +76,40 @@ class TestWindDirectionRetention:
         assert sensor.native_value == 90
 
 
+class TestMissingValueLogging:
+    """native_value() warns on a None reading, but only once per outage.
+
+    Previously it warned on every single poll a sensor stayed None, which for
+    an always-enabled sensor fed only by a best-effort fetch (e.g. one that
+    depends on the archive round trip) meant unsuppressable per-poll WARNING
+    log spam for as long as the station withheld that value.
+    """
+
+    def test_warns_once_then_stays_quiet_while_still_missing(self, caplog):
+        import logging
+
+        sensor = make_sensor({"ConsoleBatteryVoltage": 255}, key="console_battery")
+        with caplog.at_level(logging.WARNING):
+            assert sensor.native_value is None
+            assert sensor.native_value is None
+            assert sensor.native_value is None
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+
+    def test_warns_again_after_recovering_then_missing_again(self, caplog):
+        import logging
+
+        sensor = make_sensor({"ConsoleBatteryVoltage": 255}, key="console_battery")
+        with caplog.at_level(logging.WARNING):
+            assert sensor.native_value is None
+            sensor.coordinator.data = {"ConsoleBatteryVoltage": 4.9}
+            assert sensor.native_value == 4.9
+            sensor.coordinator.data = {"ConsoleBatteryVoltage": 255}
+            assert sensor.native_value is None
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 2
+
+
 class TestOptionalSensorEnabledDefault:
     def test_disabled_when_no_coordinator_data_yet(self):
         sensor = make_sensor(None, key="uv_index")

@@ -1101,6 +1101,23 @@ class DavisVantageClient:
             self._stopping = True
             self._connection_state = CONNECTION_STOPPING
 
+    async def async_cancel_shutdown(self) -> None:
+        """Resume normal operation after a begun shutdown was aborted.
+
+        Used when async_begin_shutdown() ran but the platform unload it was
+        guarding then failed, so async_close() never followed - without this,
+        _stopping would stay True forever and every future poll would raise
+        "Davis transport is stopping" even though HA still considers the
+        entry loaded.
+        """
+        async with self._submit_lock:
+            if self._executor_shutdown:
+                return
+            self._stopping = False
+            self._connection_state = (
+                CONNECTION_CONNECTED if self._last_success else CONNECTION_DISCONNECTED
+            )
+
     async def async_close(self) -> bool:
         """Stop new work, drain physical ownership, then close the transport."""
         async with self._submit_lock:

@@ -221,15 +221,22 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry
         config_entry, PLATFORMS
     )
 
-    if unload_ok:
-        close_ok = await client.async_close()
-        if not close_ok:
-            _LOGGER.error("Davis transport did not confirm closure; unload refused")
-            return False
+    if not unload_ok:
+        # Platform unload was refused; the entry stays loaded, so undo the
+        # shutdown begun above rather than leaving the client permanently
+        # rejecting I/O for an entry HA still considers active.
+        await client.async_cancel_shutdown()
+        return False
 
-        # Don't leave a stale "connection lost" repair issue behind if the
-        # user removes the integration while one is open.
-        ir.async_delete_issue(hass, DOMAIN, "connection_lost")
+    close_ok = await client.async_close()
+    if not close_ok:
+        _LOGGER.error("Davis transport did not confirm closure; unload refused")
+        await client.async_cancel_shutdown()
+        return False
+
+    # Don't leave a stale "connection lost" repair issue behind if the
+    # user removes the integration while one is open.
+    ir.async_delete_issue(hass, DOMAIN, "connection_lost")
 
     return unload_ok
 

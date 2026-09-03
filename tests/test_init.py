@@ -214,3 +214,51 @@ async def test_immediate_reload_waits_for_prior_client_close(hass):
         assert await reload_task is True
         assert client_factory.call_count == 2
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_failed_platform_unload_resumes_client_instead_of_wedging_it():
+    """A refused platform unload must not leave the client permanently stopping.
+
+    async_unload_entry() calls client.async_begin_shutdown() before attempting
+    the platform unload so in-flight I/O drains cleanly, but if the unload is
+    then refused the entry stays loaded per Home Assistant. Without undoing
+    the shutdown, every future poll would raise "Davis transport is stopping"
+    even though HA still considers the entry active.
+    """
+    from custom_components.davis_vantage import async_unload_entry
+
+    hass = MagicMock()
+    client = MagicMock()
+    client.async_begin_shutdown = AsyncMock()
+    client.async_cancel_shutdown = AsyncMock()
+    client.async_close = AsyncMock()
+    coordinator = MagicMock(client=client)
+    config_entry = MagicMock(runtime_data=MagicMock(coordinator=coordinator))
+    hass.config_entries.async_unload_platforms = AsyncMock(return_value=False)
+
+    result = await async_unload_entry(hass, config_entry)
+
+    assert result is False
+    client.async_begin_shutdown.assert_awaited_once()
+    client.async_cancel_shutdown.assert_awaited_once()
+    client.async_close.assert_not_awaited()
+
+
+async def test_close_confirmation_failure_resumes_client_instead_of_wedging_it():
+    """A close() that never confirms must also resume the client, not just refuse unload."""
+    from custom_components.davis_vantage import async_unload_entry
+
+    hass = MagicMock()
+    client = MagicMock()
+    client.async_begin_shutdown = AsyncMock()
+    client.async_cancel_shutdown = AsyncMock()
+    client.async_close = AsyncMock(return_value=False)
+    coordinator = MagicMock(client=client)
+    config_entry = MagicMock(runtime_data=MagicMock(coordinator=coordinator))
+    hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
+
+    result = await async_unload_entry(hass, config_entry)
+
+    assert result is False
+    client.async_close.assert_awaited_once()
+    client.async_cancel_shutdown.assert_awaited_once()

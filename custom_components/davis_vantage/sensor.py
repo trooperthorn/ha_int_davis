@@ -547,6 +547,11 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
         # Use the passed entry_id for the unique ID
         self._attr_unique_id = f"{entry_id}_{description.key}"
         self._attr_device_info = coordinator.device_info
+        # Tracks whether the last poll's missing-value warning already fired,
+        # so a sensor that stays None for many consecutive polls (e.g. one
+        # fed only by the best-effort archive fetch) logs once per outage
+        # instead of once per poll.
+        self._attr_missing_value_logged = False
 
     @property
     def entity_registry_enabled_default(self) -> bool:
@@ -621,24 +626,32 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
         )
         
         if value is None and self.entity_description.key not in ignored_null_keys:
-            # Using WARNING forces this to show in the standard log
-            _LOGGER.warning(
-                "Davis Sensor Alert: '%s' (key: %s) returned None.",
-                getattr(self.entity_description, "name", self.entity_description.key),
-                self.entity_description.key,
-            )
-            
-            # Detailed property dump specifically when outdoor temperature is missing
-            if self.entity_description.key in ("outside_temperature", "TempOut"):
-                try:
-                    _LOGGER.warning(
-                        "PyVantagePro Keys: %s", list(self.coordinator.data.keys())
-                    )
-                except Exception:
-                    _LOGGER.warning(
-                        "PyVantagePro Properties: %s", dir(self.coordinator.data)
-                    )
-                    
+            # Using WARNING forces this to show in the standard log, but only
+            # on the transition into "missing" - otherwise a sensor that
+            # legitimately stays None for many consecutive polls (e.g. one
+            # fed only by the best-effort archive fetch) would warn forever
+            # with no way to suppress it via log-level configuration.
+            if not self._attr_missing_value_logged:
+                _LOGGER.warning(
+                    "Davis Sensor Alert: '%s' (key: %s) returned None.",
+                    getattr(self.entity_description, "name", self.entity_description.key),
+                    self.entity_description.key,
+                )
+
+                # Detailed property dump specifically when outdoor temperature is missing
+                if self.entity_description.key in ("outside_temperature", "TempOut"):
+                    try:
+                        _LOGGER.warning(
+                            "PyVantagePro Keys: %s", list(self.coordinator.data.keys())
+                        )
+                    except Exception:
+                        _LOGGER.warning(
+                            "PyVantagePro Properties: %s", dir(self.coordinator.data)
+                        )
+                self._attr_missing_value_logged = True
+        else:
+            self._attr_missing_value_logged = False
+
         # Save the valid value to _attr_native_value so we can use it for retention later
         self._attr_native_value = value
         return value
