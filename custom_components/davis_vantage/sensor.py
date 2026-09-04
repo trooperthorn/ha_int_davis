@@ -14,7 +14,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    PERCENTAGE,
+    UnitOfRatio,
     EntityCategory,
     UnitOfElectricPotential,
     UnitOfIrradiance,
@@ -31,8 +31,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 _LOGGER = logging.getLogger(__name__)
 
-# All entities read from the shared coordinator's already-polled data rather
-# than doing their own I/O, so there's nothing for HA to serialize here.
 PARALLEL_UPDATES = 0
 
 def safe_get(data, key):
@@ -44,7 +42,7 @@ def safe_get(data, key):
 
 def get_wind_rose(degrees: float | int | str | None) -> str | None:
     """Convert wind direction in degrees to a compass rose string."""
-    # Intercept Davis missing data flags so 255 doesn't get calculated as "WSW"
+    # 255, 32767 and -32768 are Davis dash values, not bearings.
     if degrees is None or degrees in (255, 32767, 32768, -32768):
         return None
         
@@ -53,10 +51,7 @@ def get_wind_rose(degrees: float | int | str | None) -> str | None:
     except (ValueError, TypeError):
         return None
         
-    # Lowercase to match the state keys in translations/en.json and
-    # icons.json (both already have a full 16-point table for
-    # wind_direction_rose that never matched anything while this returned
-    # uppercase strings).
+    # Lowercase to match the wind_direction_rose state keys in translations/en.json.
     compass_points = [
         "n", "nne", "ne", "ene", "e", "ese", "se", "sse",
         "s", "ssw", "sw", "wsw", "w", "wnw", "nw", "nnw", "n"
@@ -103,26 +98,16 @@ def _map_forecast_icon(data: dict, mapping: dict[int, str], default: str) -> str
 class DavisSensorEntityDescription(SensorEntityDescription):
     """Class describing Davis Vantage sensor entities."""
     
-    # Custom function to extract the specific datapoint from the Davis LOOP dictionary
     value_fn: Callable[[dict], float | int | str | None]
 
 
-# ---------------------------------------------------------
-# SENSOR DEFINITIONS
-# Mapped directly to the Davis Vantage Serial Protocol v2.61
-# ---------------------------------------------------------
 SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
     DavisSensorEntityDescription(
-        # NOTE: this used to share key="ForecastIcon" with the "condition"
-        # entry below, which gives both the same unique_id - HA silently
-        # drops whichever loses that race, so this entity could never
-        # actually be enabled. Gave it its own key.
         key="forecast_icon_condition",
         translation_key="forecast_icon",
         name="Current Condition",
         device_class=SensorDeviceClass.ENUM,
         icon="mdi:weather-partly-cloudy",
-        # Set to False to disable this sensor by default
         entity_registry_enabled_default=False,
         options=[
             "sunny",
@@ -134,17 +119,18 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         ],
         value_fn=lambda data: _map_forecast_icon(
             data,
+            # Icon codes: see FORECAST_ICON_TO_CONDITION in weather.py.
             {
-                0: "sunny",        # Default state when console is waiting for 3-hr barometric trend
-                8: "sunny",        # Sun (Mostly Clear)
-                6: "partlycloudy", # Partial Sun + Cloud (Partly Cloudy)
-                2: "cloudy",       # Cloud (Mostly Cloudy)
-                7: "rainy",        # Partial Sun + Cloud + Rain (Rain within 12 hrs)
-                3: "cloudy",       # Cloud + Rain (Rain within 12 hrs)
-                18: "snowy",       # Cloud + Snow (Snow within 12 hrs)
-                22: "snowy",       # Partial Sun + Cloud + Snow (Snow within 12 hrs)
-                19: "snowy-rainy", # Cloud + Rain + Snow (Rain or Snow within 12 hrs)
-                23: "snowy-rainy", # Partial Sun + Cloud + Rain + Snow (Rain or Snow)
+                0: "sunny",
+                8: "sunny",
+                6: "partlycloudy",
+                2: "cloudy",
+                7: "rainy",
+                3: "cloudy",
+                18: "snowy",
+                22: "snowy",
+                19: "snowy-rainy",
+                23: "snowy-rainy",
             },
             "sunny",
         ),
@@ -165,17 +151,18 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         ],
         value_fn=lambda data: _map_forecast_icon(
             data,
+            # Icon codes: see FORECAST_ICON_TO_CONDITION in weather.py.
             {
-                0: "Sunny",        # Default state when console is waiting for 3-hr barometric trend
-                8: "Sunny",        # Sun (Mostly Clear)
-                6: "Partly Cloudy", # Partial Sun + Cloud (Partly Cloudy)
-                2: "Cloudy",       # Cloud (Mostly Cloudy)
-                7: "Rainy",        # Partial Sun + Cloud + Rain (Rain within 12 hrs)
-                3: "Cloudy",       # Cloud + Rain (Rain within 12 hrs)
-                18: "Snowy",       # Cloud + Snow (Snow within 12 hrs)
-                22: "Snowy",       # Partial Sun + Cloud + Snow (Snow within 12 hrs)
-                19: "Snowy Rainy", # Cloud + Rain + Snow (Rain or Snow within 12 hrs)
-                23: "Snowy Rainy", # Partial Sun + Cloud + Rain + Snow (Rain or Snow)
+                0: "Sunny",
+                8: "Sunny",
+                6: "Partly Cloudy",
+                2: "Cloudy",
+                7: "Rainy",
+                3: "Cloudy",
+                18: "Snowy",
+                22: "Snowy",
+                19: "Snowy Rainy",
+                23: "Snowy Rainy",
             },
             "Sunny",
         ),
@@ -194,13 +181,11 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         translation_key="forecast_icon_raw",
         name="Forecast Icon Raw",
         icon="mdi:eye-check-outline",
-        # Set to False to disable this sensor by default
         entity_registry_enabled_default=False,
         value_fn=lambda data: (
             str(val) if (val := safe_get(data, 'ForecastIcon')) is not None else "Missing"
         ),
     ),
-    # --- TEMPERATURE & HUMIDITY ---
     DavisSensorEntityDescription(
         key="TempOut",
         translation_key="temperature",
@@ -219,8 +204,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data['TempIn'], # Use the exact PyVantagePro key here
- #       entity_category=EntityCategory.Inside, # Hides it from the main dashboard & Voice assistants
+        value_fn=lambda data: data['TempIn'],
     ),
     DavisSensorEntityDescription(
         key="HumOut",
@@ -228,9 +212,9 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         name="Outside Humidity",
         icon="mdi:water-percent",
         device_class=SensorDeviceClass.HUMIDITY,
-        native_unit_of_measurement=PERCENTAGE,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data['HumOut'], # Use the exact PyVantagePro key here
+        value_fn=lambda data: data['HumOut'],
     ),
     DavisSensorEntityDescription(
         key="inside_humidity",
@@ -238,13 +222,11 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         name="Inside Humidity",
         icon="mdi:water-percent",
         device_class=SensorDeviceClass.HUMIDITY,
-        native_unit_of_measurement=PERCENTAGE,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data['HumIn'], # Use the exact PyVantagePro key here
-   #     entity_category=EntityCategory.Inside, # Hides it from the main dashboard & Voice assistants
+        value_fn=lambda data: data['HumIn'],
     ),
 
-    # --- WIND & PRESSURE ---
     DavisSensorEntityDescription(
         key="WindSpeed",
         translation_key="wind_speed",
@@ -253,13 +235,10 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.WIND_SPEED,
         native_unit_of_measurement=UnitOfSpeed.MILES_PER_HOUR,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data['WindSpeed'], # Use the exact PyVantagePro key here
-  #      entity_category=EntityCategory.Climate, # Hides it from the main dashboard & Voice assistants
+        value_fn=lambda data: data['WindSpeed'],
     ),
     DavisSensorEntityDescription(
-        # NOTE: "WindSpeed10Min" is the 10-minute *average* wind speed, not a
-        # gust (Davis manual, LOOP data format). The key is kept as-is so
-        # existing entity_ids/history aren't broken by the rename.
+        # WindSpeed10Min is a 10-minute average, not a gust; key kept so entity_ids survive.
         key="wind_speed_10_min_gust",
         translation_key="wind_speed_average_10min",
         name="Wind Speed (10 min Avg)",
@@ -267,7 +246,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.WIND_SPEED,
         native_unit_of_measurement=UnitOfSpeed.MILES_PER_HOUR,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data['WindSpeed10Min'], # Use the exact PyVantagePro key here
+        value_fn=lambda data: data['WindSpeed10Min'],
     ),
     DavisSensorEntityDescription(
         key="wind_gust",
@@ -277,8 +256,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.WIND_SPEED,
         native_unit_of_measurement=UnitOfSpeed.MILES_PER_HOUR,
         state_class=SensorStateClass.MEASUREMENT,
-        # True gust: the high wind speed from the last archive interval
-        # (client.py's add_archive_info), not the 10-min average.
+        # WindGust is the last archive interval's high, not the 10-min average.
         value_fn=lambda data: data.get('WindGust'),
     ),
    DavisSensorEntityDescription(
@@ -295,13 +273,10 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         translation_key="wind_direction_rose",
         name="Wind Direction (Rose)",
         icon="mdi:compass",
-        # Notice we don't use a unit_of_measurement or state_class
-        # because this is a text string, not a numerical measurement!
         value_fn=lambda data: get_wind_rose(_wind_dir_or_none(data)),
     ),
     DavisSensorEntityDescription(
-        # Only populated in LOOP2 mode (add_loop2_wind_info in client.py) -
-        # the direction of the last 10-minute gust, not an average direction.
+        # LOOP2-only: direction of the 10-minute gust, not an average direction.
         key="wind_gust_direction",
         translation_key="wind_gust_direction",
         name="Wind Gust Direction",
@@ -322,7 +297,6 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         value_fn=_barometer_or_none,
     ),
 
-    # --- PRECIPITATION (RATES & CUMULATIVE) ---
     DavisSensorEntityDescription(
         key="rain_rate",
         translation_key="rain_rate",
@@ -330,14 +304,10 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         icon="mdi:weather-pouring",
         device_class=SensorDeviceClass.PRECIPITATION_INTENSITY,
         native_unit_of_measurement=UnitOfVolumetricFlux.INCHES_PER_HOUR,
-        state_class=SensorStateClass.MEASUREMENT, # Rate fluctuates up and down
-        value_fn=lambda data: data['RainRate'], # Use the exact PyVantagePro key here
- #       entity_category=EntityCategory.Rain, # Hides it from the main dashboard & Voice assistants
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: data['RainRate'],
     ),
     DavisSensorEntityDescription(
-        # Available in both LOOP1 and LOOP2. Referenced by
-        # blueprints/automation/flash_flood.yaml, which previously pointed
-        # at a sensor that didn't exist.
         key="rain_storm",
         translation_key="rain_storm",
         name="Rain Storm",
@@ -348,7 +318,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         value_fn=lambda data: data.get('RainStorm'),
     ),
     DavisSensorEntityDescription(
-        # LOOP2-only. Same blueprint reference as rain_storm above.
+        # LOOP2-only.
         key="rain_15_min",
         translation_key="rain_15_min",
         name="Rain (15 Min)",
@@ -366,9 +336,8 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         icon="mdi:water",
         device_class=SensorDeviceClass.PRECIPITATION,
         native_unit_of_measurement=UnitOfLength.INCHES,
-        state_class=SensorStateClass.TOTAL_INCREASING, # MUST be TOTAL_INCREASING for HA Energy/Water dashboard
-        value_fn=lambda data: data['RainDay'], # Use the exact PyVantagePro key here
-#        entity_category=EntityCategory.Rain, # Hides it from the main dashboard & Voice assistants
+        state_class=SensorStateClass.TOTAL_INCREASING,  # required by the HA Energy/Water dashboard
+        value_fn=lambda data: data['RainDay'],
     ),
     DavisSensorEntityDescription(
         key="rain_month",
@@ -378,8 +347,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.PRECIPITATION,
         native_unit_of_measurement=UnitOfLength.INCHES,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda data: data['RainMonth'], # Use the exact PyVantagePro key here
-#        entity_category=EntityCategory.Rain, # Hides it from the main dashboard & Voice assistants
+        value_fn=lambda data: data['RainMonth'],
     ),
     DavisSensorEntityDescription(
         key="rain_year",
@@ -389,12 +357,9 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.PRECIPITATION,
         native_unit_of_measurement=UnitOfLength.INCHES,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda data: data['RainYear'], # Use the exact PyVantagePro key here
- #       entity_category=EntityCategory.Rain, # Hides it from the main dashboard & Voice assistants
+        value_fn=lambda data: data['RainYear'],
     ),
     DavisSensorEntityDescription(
-        # Evapotranspiration - useful for irrigation-controller integrations
-        # (e.g. rain-delay/watering-need logic) that expect this alongside rainfall.
         key="et_day",
         translation_key="et_day",
         name="Evapotranspiration Today",
@@ -405,7 +370,6 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         value_fn=lambda data: data.get('ETDay'),
     ),
 
-    # --- SOLAR & UV ---
     DavisSensorEntityDescription(
         key="solar_radiation",
         translation_key="solar_radiation",
@@ -414,18 +378,15 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.IRRADIANCE,
         native_unit_of_measurement=UnitOfIrradiance.WATTS_PER_SQUARE_METER,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data['SolarRad'], # Use the exact PyVantagePro key here
-  #      entity_category=EntityCategory.Sun, # Hides it from the main dashboard & Voice assistants
+        value_fn=lambda data: data['SolarRad'],
     ),
     DavisSensorEntityDescription(
         key="uv_index",
         translation_key="uv_level",
         name="UV Index",
         icon="mdi:weather-sunny-alert",
-        # HA does not currently enforce a UV device class natively, so we just use MEASUREMENT
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data['UV'], # Use the exact PyVantagePro key here
-  #      entity_category=EntityCategory.Sun, # Hides it from the main dashboard & Voice assistants
+        value_fn=lambda data: data['UV'],
     ),
     DavisSensorEntityDescription(
         key="HeatIndex",
@@ -458,8 +419,7 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         value_fn=lambda data: _float_or_none(data, 'FeelsLike'),
     ),
     DavisSensorEntityDescription(
-        # THSW (Temp-Humidity-Sun-Wind) index: Davis's own apparent-temperature
-        # figure, only available in LOOP2 mode - see LoopData2Parser.
+        # LOOP2-only.
         key="THSWIndex",
         translation_key="thsw_index",
         name="THSW Index",
@@ -495,7 +455,6 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         value_fn=lambda data: data.get("BarTrend"),
     ),
 
-    # --- DIAGNOSTICS & SYSTEM STATUS ---
     DavisSensorEntityDescription(
         key="console_battery",
         translation_key="battery_voltage",
@@ -504,8 +463,8 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.VOLTAGE,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC, # Hides it from the main dashboard & Voice assistants
-        value_fn=lambda data: data.get('ConsoleBatteryVoltage') # Use the exact PyVantagePro key here
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: data.get('ConsoleBatteryVoltage')
     ),
 )
 
@@ -515,13 +474,12 @@ async def async_setup_entry(
     entry: ConfigEntry, 
     async_add_entities: AddEntitiesCallback
 ) -> None:
-    # Grab the coordinator safely from runtime_data
-    coordinator = entry.runtime_data.coordinator # Ensure you access .coordinator here
+    coordinator = entry.runtime_data.coordinator
 
     entities = [
         DavisVantageSensor(
             coordinator=coordinator,
-            entry_id=entry.entry_id, # Pass entry_id explicitly
+            entry_id=entry.entry_id,
             description=description
         )
         for description in SENSOR_TYPES
@@ -533,24 +491,17 @@ async def async_setup_entry(
 class DavisVantageSensor(CoordinatorEntity, SensorEntity):
     """Representation of a Davis Vantage Sensor."""
 
-    # Tells Home Assistant to use the device name + translation_key/name,
-    # matching the pattern already used in binary_sensor.py.
     _attr_has_entity_name = True
     entity_description: DavisSensorEntityDescription
 
-    # --- UPDATE THIS INIT FUNCTION ---
     def __init__(self, coordinator, entry_id: str, description: DavisSensorEntityDescription) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.entity_description = description
         
-        # Use the passed entry_id for the unique ID
         self._attr_unique_id = f"{entry_id}_{description.key}"
         self._attr_device_info = coordinator.device_info
-        # Tracks whether the last poll's missing-value warning already fired,
-        # so a sensor that stays None for many consecutive polls (e.g. one
-        # fed only by the best-effort archive fetch) logs once per outage
-        # instead of once per poll.
+        # Latches so a persistently missing value warns once per outage, not per poll.
         self._attr_missing_value_logged = False
 
     @property
@@ -558,26 +509,23 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
         """Disable optional sensors by default if they return no data on startup."""
         optional_keys = ("solar_radiation", "uv_index", "SolarRad", "UV")
         
-        # Check if this specific sensor is one of the optional ones
         if self.entity_description.key in optional_keys:
             if not self.coordinator.data:
                 return False
-                
-            # Safely extract the initial value during setup
+
             try:
                 val = self.entity_description.value_fn(self.coordinator.data)
             except (KeyError, TypeError):
                 val = None
                 
-            # If the initial value is None or the Davis "missing" value (255)
+            # 255 is the Davis dash value for a sensor that is not fitted.
             if val is None or val == 255:
                 _LOGGER.debug(
                     "Disabling optional sensor '%s' because no initial data was found.", 
                     self.entity_description.key
                 )
                 return False
-                
-        # Default to True (enabled) for all other sensors
+
         return getattr(self.entity_description, "entity_registry_enabled_default", True)
 
     @property
@@ -586,39 +534,27 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
         if not self.coordinator.data:
             return None
             
-        # Use our custom value_fn from the Dataclass to grab the exact byte/value
         try:
             value = self.entity_description.value_fn(self.coordinator.data)
         except (KeyError, TypeError, AttributeError):
             value = None
-            
-        # 1. Identify if the value is a Davis dash/invalid value
-        # 255, 32767, and -32768 indicate lost sync or unplugged sensors
+
+        # 255, 32767 and -32768 are Davis dash values (lost sync or unplugged sensor).
         is_dash_value = value is None or value in (255, 32767, 32768, -32768)
 
-        # 2. WIND DIRECTION RETENTION LOGIC
-        # Davis uses 0 or 32767 to indicate calm air or lost sync
+        # Davis reports 0 or 32767 for calm air or lost sync; hold the last real direction.
         if self.entity_description.key in ("wind_direction", "WindDir", "wind_direction_rose", "WindRose"):
             if is_dash_value or value == 0 or value == "N":
-                # If the wind is calm, check if we have a saved previous direction
                 if getattr(self, "_attr_native_value", None) is not None:
-                    # Previously stored values here are always float/int/str
-                    # (see below) - narrow SensorEntity's broader StateType.
                     return cast("float | int | str", self._attr_native_value)
-                # If fresh boot and no history, return None (Unknown) to keep graphs clean
                 value = None
 
-        # 3. RAIN RATE FALLBACK
         elif self.entity_description.key in ("rain_rate", "RainRate") and is_dash_value:
-            # Force Rain Rate to 0 instead of Unknown/None when missing
             value = 0
 
-        # 4. ALL OTHER SENSORS
         elif is_dash_value:
             value = None
-            
-        # --- LOG MISSING VALUES (runs even when debug logging is disabled) ---
-        # Ignore expected-missing sensors
+
         ignored_null_keys = (
             "solar_radiation", "uv_index", "SolarRad", "UV", 
             "wind_direction", "WindDir", "wind_direction_rose", "WindRose",
@@ -626,11 +562,7 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
         )
         
         if value is None and self.entity_description.key not in ignored_null_keys:
-            # Using WARNING forces this to show in the standard log, but only
-            # on the transition into "missing" - otherwise a sensor that
-            # legitimately stays None for many consecutive polls (e.g. one
-            # fed only by the best-effort archive fetch) would warn forever
-            # with no way to suppress it via log-level configuration.
+            # Warn only on the transition into missing; see docs/design.md.
             if not self._attr_missing_value_logged:
                 _LOGGER.warning(
                     "Davis Sensor Alert: '%s' (key: %s) returned None.",
@@ -638,7 +570,6 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
                     self.entity_description.key,
                 )
 
-                # Detailed property dump specifically when outdoor temperature is missing
                 if self.entity_description.key in ("outside_temperature", "TempOut"):
                     try:
                         _LOGGER.warning(
@@ -652,7 +583,6 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
         else:
             self._attr_missing_value_logged = False
 
-        # Save the valid value to _attr_native_value so we can use it for retention later
         self._attr_native_value = value
         return value
 

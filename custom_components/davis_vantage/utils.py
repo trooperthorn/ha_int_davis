@@ -19,7 +19,7 @@ def convert_to_mbar(value: float) -> float:
     return round(value * 33.8637526, 1)
 
 def convert_to_mm(value: float) -> float:
-    return round(value * 20.0, 1) # Use metric tipping bucket modification
+    return round(value * 20.0, 1)
 
 def convert_kmh_to_ms(windspeed: float) -> float:
     return round(windspeed / 3.6, 1)

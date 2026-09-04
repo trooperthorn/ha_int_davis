@@ -20,8 +20,7 @@ condition:
     entity_id: sun.sun
     attribute: elevation
     above: 40
-  # Only alert if the sky itself looks clear/sunny - otherwise low solar
-  # radiation is just weather, not a panel problem.
+  # Only a clear sky makes low radiation a sensor problem rather than weather.
   - condition: state
     entity_id: weather.davis_vantage_vantage_weather_station
     state:

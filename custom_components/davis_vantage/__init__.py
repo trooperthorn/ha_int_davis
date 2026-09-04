@@ -37,7 +37,6 @@ from .verification import default_verification_result
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.WEATHER]
 
-# Suppress pyvpdriver / serial library verbose output
 logging.getLogger("pyvpdriver").setLevel(logging.WARNING)
 
 _LOGGER = logging.getLogger(__name__)
@@ -123,7 +122,6 @@ async def async_setup_entry(
     _LOGGER.debug("Setting up entry %s with data: %s", config_entry.entry_id, config_entry.data)
     _LOGGER.debug("Entry options: %s", config_entry.options)
 
-    # 1. Connection configuration
     protocol = config_entry.data.get(CONFIG_PROTOCOL, "")
     link = config_entry.data.get(CONFIG_LINK, "")
     
@@ -131,7 +129,6 @@ async def async_setup_entry(
         CONFIG_PERSISTENT_CONNECTION, False
     )
 
-    # 2. Client instantiation
     baud_rate = config_entry.data.get(CONFIG_BAUD_RATE, DEFAULT_BAUD_RATE)
     use_loop2 = config_entry.options.get(CONF_USE_LOOP2, False) and bool(
         config_entry.data.get(CONFIG_LOOP2_SUPPORTED, False)
@@ -145,7 +142,6 @@ async def async_setup_entry(
         baud_rate=baud_rate,
     )
 
-    # 3. Verify hardware connectivity
     try:
         await client.connect_to_station()
         await client.get_station_info()
@@ -159,7 +155,6 @@ async def async_setup_entry(
         await client.async_close()
         raise ConfigEntryNotReady(f"Failed to connect to Davis station: {err}") from err
 
-    # 4. Device Registry Information
     device_info = DeviceInfo(
         identifiers={
             (
@@ -174,7 +169,6 @@ async def async_setup_entry(
         hw_version=None,
     )
 
-    # 5. Initialize Coordinator
     coordinator = DavisVantageDataUpdateCoordinator(
         hass=hass, 
         client=client, 
@@ -182,30 +176,23 @@ async def async_setup_entry(
         config_entry=config_entry
     )
 
-    # Initial data refresh
     try:
         await coordinator.async_config_entry_first_refresh()
     except Exception as err:
         _LOGGER.warning("Initial refresh failed for Davis Vantage (%s). Retrying...", err)
-        # Ensure the connection is closed before failing setup, so HA's
-        # automatic retry of ConfigEntryNotReady doesn't hit "Resource busy"
-        # trying to reopen a port this entry never released.
+        # Release the port now or HA's ConfigEntryNotReady retry hits "Resource busy".
         await client.async_begin_shutdown()
         await client.async_close()
         raise ConfigEntryNotReady(f"Initial data fetch failed: {err}") from err
 
-    # 6. Store references
     config_entry.runtime_data = RuntimeData(coordinator=coordinator)
 
-    # 7. Forward setup to sensor, binary_sensor, and weather platforms
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
-    # 8. Register entry update listener (Configure / Options Flow)
     config_entry.async_on_unload(
         config_entry.add_update_listener(async_reload_entry)
     )
 
-    # 9. Register domain services once; handlers resolve the requested entry.
     async_setup_services(hass)
 
     return True
@@ -222,9 +209,7 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry
     )
 
     if not unload_ok:
-        # Platform unload was refused; the entry stays loaded, so undo the
-        # shutdown begun above rather than leaving the client permanently
-        # rejecting I/O for an entry HA still considers active.
+        # The entry stays loaded, so undo the shutdown begun above.
         await client.async_cancel_shutdown()
         return False
 
@@ -234,8 +219,6 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: DavisConfigEntry
         await client.async_cancel_shutdown()
         return False
 
-    # Don't leave a stale "connection lost" repair issue behind if the
-    # user removes the integration while one is open.
     ir.async_delete_issue(hass, DOMAIN, "connection_lost")
 
     return unload_ok

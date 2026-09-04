@@ -19,13 +19,9 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.sun import is_up
 from homeassistant.util import dt as dt_util
 
-# The single weather entity reads from the shared coordinator's already-
-# polled data rather than doing its own I/O, so there's nothing for HA to
-# serialize here.
 PARALLEL_UPDATES = 0
 
-# Davis Protocol v2.61 forecast icon -> HA condition string.
-# See client.py add_additional_info / manual section IX.1 "Forecast Icons".
+# Davis forecast icon code -> HA condition (manual section IX.1); see docs/protocol.md.
 FORECAST_ICON_TO_CONDITION = {
     0: "sunny",  # Default state when console is waiting for 3-hr barometric trend
     8: "sunny",          # Sun (Mostly Clear)
@@ -43,23 +39,16 @@ FORECAST_ICON_TO_CONDITION = {
 class DavisWeatherEntity(CoordinatorEntity, WeatherEntity):
     """Representation of a Davis Vantage Weather Station."""
 
-    # HA will automatically convert these if the user prefers Metric
     _attr_native_temperature_unit = UnitOfTemperature.FAHRENHEIT
     _attr_native_pressure_unit = UnitOfPressure.INHG
     _attr_native_wind_speed_unit = UnitOfSpeed.MILES_PER_HOUR
     _attr_native_precipitation_unit = UnitOfLength.INCHES
-    # The console has no multi-day/multi-hour numeric forecast - only a
-    # single "next ~12 hours" icon + a canned text rule (see ForecastIcon /
-    # ForecastRuleNo, also exposed as their own sensors). TWICE_DAILY with a
-    # single condition-only entry is the closest honest fit; there is no
-    # predicted temperature/wind/etc. to report.
+    # The console only offers a single ~12-hour condition icon; see docs/design.md.
     _attr_supported_features = WeatherEntityFeature.FORECAST_TWICE_DAILY
 
-    # 1. Add entry_id: str to the parameters
     def __init__(self, coordinator, entry_id: str):
         super().__init__(coordinator)
 
-        # 2. Swap mac_address for entry_id
         self._attr_unique_id = f"{entry_id}_weather"
 
         self._attr_name = "Vantage Weather Station"
@@ -112,13 +101,7 @@ class DavisWeatherEntity(CoordinatorEntity, WeatherEntity):
         return condition_state
 
     async def async_forecast_twice_daily(self) -> list[Forecast] | None:
-        """Return the console's single "next ~12 hours" outlook.
-
-        The console has no per-day/per-hour predicted temperature, wind, or
-        precipitation - only a condition icon and a text rule (ForecastRule
-        sensor). This intentionally returns condition only; anything else
-        would be fabricated, not a real forecast.
-        """
+        """Return the console's single "next ~12 hours" outlook, condition only."""
         condition_state = self._forecast_condition()
         if condition_state is None:
             return None
@@ -141,8 +124,7 @@ class DavisWeatherEntity(CoordinatorEntity, WeatherEntity):
 
     @property
     def native_pressure(self) -> float | None:
-        # The console physically cannot log a barometer reading outside
-        # 20.000-32.500 inHg; anything outside that range is a bad read.
+        # Outside 20.000-32.500 inHg is a bad read; the console cannot log it.
         pressure = self.coordinator.data.get("Barometer")
         if pressure is None or not (20.0 <= float(pressure) <= 32.5):
             return None
@@ -158,9 +140,7 @@ class DavisWeatherEntity(CoordinatorEntity, WeatherEntity):
         if not self.coordinator.data:
             return None
 
-        # "WindGust" is the archive-derived high wind speed (add_archive_info
-        # in client.py). "WindSpeed10Min" is the 10-minute *average* speed,
-        # not a gust - don't conflate the two.
+        # WindGust is the archive-interval high; WindSpeed10Min is an average, not a gust.
         value = self.coordinator.data.get("WindGust")
         if value is None or value == 255:
             return None
@@ -174,9 +154,7 @@ class DavisWeatherEntity(CoordinatorEntity, WeatherEntity):
     @property
     def native_apparent_temperature(self) -> float | None:
         """Return the feels-like temperature in °F."""
-        # THSW (Temp-Humidity-Sun-Wind) is Davis's own apparent-temperature
-        # figure and is only available in LOOP2 mode; fall back to HeatIndex
-        # (available in both modes) when it isn't.
+        # THSW is LOOP2-only; HeatIndex exists in both modes.
         data = self.coordinator.data
         thsw = data.get("THSWIndex")
         return thsw if thsw is not None else data.get("HeatIndex")

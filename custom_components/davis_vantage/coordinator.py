@@ -15,9 +15,7 @@ from .const import DOMAIN
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
-# Number of consecutive failed polls before raising a repair issue. High
-# enough that a single transient serial hiccup (this hardware is prone to
-# them) doesn't nag the user, low enough to actually notice a real outage.
+# Serial hiccups are common on this hardware; one dropped poll must not raise an issue.
 CONNECTION_ISSUE_THRESHOLD = 3
 CONNECTION_ISSUE_ID = "connection_lost"
 
@@ -59,22 +57,15 @@ class DavisVantageDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> dict[str, Any]:
         """Update data via library with HA startup safeguards."""
         try:
-            # Enforce a 15-second timeout to accommodate wake-up retries and parsing
+            # 15 s covers wake-up retries plus parsing.
             async with asyncio.timeout(15):
 
-                # 1. Call the function directly WITHOUT the executor wrapper
                 data = self.client.async_get_current_data()
 
-                # 2. The Ultimate Coroutine Unwrapper
                 while inspect.isawaitable(data):
                     data = await data
 
-                # async_get_current_data() catches its own errors internally
-                # and returns a dict with LastError set rather than raising -
-                # without this check, the coordinator would treat a
-                # completely unreachable console as a successful update
-                # forever (stale data, entities never go unavailable, no
-                # repair issue, nothing to tell the user something is wrong).
+                # The client reports LastError instead of raising; without this an unreachable console counts as success.
                 if data.get("LastError"):
                     raise UpdateFailed(data["LastError"])
 
@@ -104,15 +95,7 @@ class DavisVantageDataUpdateCoordinator(DataUpdateCoordinator):
         self._consecutive_failures = 0
 
     def _on_update_failure(self) -> None:
-        """Track the failure streak and raise a repair issue once it's sustained.
-
-        A single dropped poll is common with this hardware (serial hiccups,
-        a missed wake-up ACK) and isn't worth surfacing. A sustained outage
-        - e.g. the console powered off, or the USB device got reassigned to
-        a different /dev/ttyUSBx path after a reboot - is, and the fix is
-        the same either way: reconfigure the integration with the right
-        port/link.
-        """
+        """Track the failure streak and raise a repair issue once it's sustained."""
         self._consecutive_failures += 1
         if self._consecutive_failures == CONNECTION_ISSUE_THRESHOLD:
             ir.async_create_issue(

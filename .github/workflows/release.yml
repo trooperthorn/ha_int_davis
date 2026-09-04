@@ -1,14 +1,4 @@
-# Reconciles main into a complete, verifiable GitHub Release. A normal merge
-# is the release trigger: nobody bumps manifest.json's version or pushes a
-# tag by hand - this workflow computes the next v<YYYY.MM.DD>.<build>
-# version itself, commits it, tags it, and publishes.
-#
-# Known limitation: version resolution scans existing tags for today's date,
-# so a manual "re-run jobs" against an already-released commit mints the
-# next sequential build number and publishes a second, functionally
-# identical release rather than detecting "this commit already shipped".
-# That's a harmless extra release, not a broken one - avoid it by using
-# workflow_dispatch or a fresh push instead of re-running a stale run.
+# A merge to main is the release trigger; see docs/operations.md.
 name: Release
 
 on:
@@ -24,152 +14,144 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  ARCHIVE: davis_vantage.zip
+
 jobs:
-  # Use the same gate that guards pull requests. Publishing cannot begin
-  # until pytest, hassfest, and the HACS validator all pass.
   tests:
     uses: ./.github/workflows/test.yml
     permissions:
       contents: read
 
+  validate:
+    uses: ./.github/workflows/validate.yml
+    permissions:
+      contents: read
+
   release:
     if: github.ref == 'refs/heads/main'
-    needs: tests
+    needs: [tests, validate]
     runs-on: ubuntu-latest
     permissions:
       attestations: write
       contents: write
       id-token: write
     steps:
-      - name: Check out main with full history
+      - name: Check out the exact main commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Resolve the next calendar version
+      - name: Resolve and validate the release version
         id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --tags --force
-
-          TODAY="$(date -u +%Y.%m.%d)"
-          LAST_BUILD="$(git tag -l "v${TODAY}.*" \
-            | sed -E "s/^v${TODAY}\.//" \
-            | grep -E '^[0-9]+$' \
-            | sort -n | tail -1 || true)"
-          NEXT_BUILD=$(( ${LAST_BUILD:-0} + 1 ))
-          VERSION="${TODAY}.${NEXT_BUILD}"
-          TAG="v${VERSION}"
-
-          echo "Next version: $VERSION (tag $TAG)"
+          VERSION="$(python3 scripts/build_release_artifacts.py --validate-only)"
+          PREFIX="$(python3 -c 'import json; print(json.load(open(".release.json")).get("tag_prefix", "v"))')"
+          TAG="${PREFIX}${VERSION}"
           printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Build archive and bump manifest.json
-        run: |
-          python3 scripts/build_release_artifacts.py \
-            --set-version "${{ steps.version.outputs.version }}" \
-            --output dist/davis_vantage.zip
-
-      - name: Commit the version bump
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add custom_components/davis_vantage/manifest.json
-          if git diff --cached --quiet; then
-            echo "manifest.json already at this version; nothing to commit."
-          else
-            git commit -m "Release ${TAG}"
-            git push origin HEAD:main
+          RELEASE_DRAFT="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [ "$RELEASE_DRAFT" = "false" ]; then
+            echo "Published release $TAG already exists; no asset will be replaced."
+            printf 'publish=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          printf 'sha=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-        id: bump
+          if [ "$RELEASE_DRAFT" = "true" ]; then
+            echo "Resuming incomplete draft release $TAG."
+          fi
+          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            TAG_COMMIT="$(git rev-list -n 1 "$TAG")"
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::error::Tag $TAG already points to $TAG_COMMIT, not $GITHUB_SHA"
+              exit 1
+            fi
+          fi
+          printf 'publish=true\n' >> "$GITHUB_OUTPUT"
 
-      - name: Tag the release commit
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-          SHA: ${{ steps.bump.outputs.sha }}
-        run: |
-          set -euo pipefail
-          gh api --method POST \
-            "/repos/${GITHUB_REPOSITORY}/git/refs" \
-            --field "ref=refs/tags/$TAG" \
-            --field "sha=$SHA" >/dev/null
+      - name: Build deterministic HACS archive
+        if: steps.version.outputs.publish == 'true'
+        run: python3 scripts/build_release_artifacts.py --output "dist/${ARCHIVE}"
 
-      # Pinned to the immutable commit behind anchore/sbom-action v0.24.2.
+      # See docs/security.md for the SBOM, attestation, and sequencing rules.
       - name: Generate SPDX SBOM
+        if: steps.version.outputs.publish == 'true'
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
-          file: dist/davis_vantage.zip
+          file: dist/${{ env.ARCHIVE }}
           format: spdx-json
-          output-file: dist/davis_vantage.spdx.json
+          output-file: dist/${{ env.ARCHIVE }}.spdx.json
           upload-artifact: false
           upload-release-assets: false
           dependency-snapshot: false
 
       - name: Generate release checksums
+        if: steps.version.outputs.publish == 'true'
         working-directory: dist
-        run: sha256sum davis_vantage.zip davis_vantage.spdx.json > SHA256SUMS
+        run: sha256sum "${ARCHIVE}" "${ARCHIVE}.spdx.json" > SHA256SUMS
 
-      # Pinned to the immutable commit behind actions/attest v4.
       - name: Attest build provenance
+        if: steps.version.outputs.publish == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: dist/davis_vantage.zip
+          subject-path: dist/${{ env.ARCHIVE }}
 
       - name: Attest the release SBOM
+        if: steps.version.outputs.publish == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: dist/davis_vantage.zip
-          sbom-path: dist/davis_vantage.spdx.json
+          subject-path: dist/${{ env.ARCHIVE }}
+          sbom-path: dist/${{ env.ARCHIVE }}.spdx.json
 
-      # Immutable releases lock their tag and assets at publication, so the
-      # sequence is: draft, attach everything, publish.
-      - name: Create draft release and attach assets
+      - name: Stage immutable tag and draft release
+        if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
-          SHA: ${{ steps.bump.outputs.sha }}
+        shell: bash
         run: |
           set -euo pipefail
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$SHA" \
-            --title "$TAG" \
-            --generate-notes \
-            --verify-tag \
-            --draft
+          if ! git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            gh api --method POST "/repos/${GITHUB_REPOSITORY}/git/refs" \
+              --field "ref=refs/tags/$TAG" --field "sha=$GITHUB_SHA" >/dev/null
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            IS_DRAFT="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+            if [ "$IS_DRAFT" != "true" ]; then
+              echo "::error::Release $TAG was published during this run."
+              exit 1
+            fi
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "$TAG" --generate-notes --verify-tag --draft
+          fi
+          gh release upload "$TAG" "dist/${ARCHIVE}" "dist/${ARCHIVE}.spdx.json" dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --clobber
 
-          gh release upload "$TAG" \
-            dist/davis_vantage.zip \
-            dist/davis_vantage.spdx.json \
-            dist/SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" \
-            --clobber
-
-      - name: Publish the release
+      - name: Publish and lock the complete release
+        if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
-        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
 
       - name: Publish verification instructions
+        if: steps.version.outputs.publish == 'true'
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           {
             echo '### Release verification'
             echo
-            echo "Published \`$TAG\`."
+            echo "Published \`$TAG\` from \`$GITHUB_SHA\`."
             echo
             echo '```bash'
-            echo "gh release download $TAG -R $GITHUB_REPOSITORY -p davis_vantage.zip -p SHA256SUMS"
+            echo "gh release download $TAG -R $GITHUB_REPOSITORY -p ${ARCHIVE} -p SHA256SUMS"
             echo 'sha256sum --check SHA256SUMS --ignore-missing'
-            echo "gh attestation verify davis_vantage.zip -R $GITHUB_REPOSITORY"
+            echo "gh attestation verify ${ARCHIVE} -R $GITHUB_REPOSITORY"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

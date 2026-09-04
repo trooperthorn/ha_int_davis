@@ -189,9 +189,7 @@ def _read_exact(transport: _ProbeTransport, size: int, timeout: float) -> bytes:
         if chunk:
             chunks.extend(chunk)
         else:
-            # A transport with a real timeout blocks inside read() above, but
-            # a non-blocking one (read() returns b"" immediately) would spin
-            # this loop at full CPU for the whole deadline otherwise.
+            # A non-blocking transport returns b"" immediately; sleep so the loop does not spin.
             time.sleep(0.01)
     return bytes(chunks)
 
@@ -236,8 +234,7 @@ def verify_serial(endpoint: str) -> VerificationResult:
                 timeout=VERIFY_TIMEOUT,
                 write_timeout=VERIFY_TIMEOUT,
             )
-            # Unlike pyserial, serialx constructs a closed transport.  Open it
-            # explicitly before the Davis wake exchange.
+            # serialx constructs a closed transport; open it explicitly.
             serial_device.open()
             serial_port = serial_device
             opened = True

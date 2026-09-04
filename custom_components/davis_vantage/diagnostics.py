@@ -1,12 +1,4 @@
-"""Diagnostics support for Davis Vantage.
-
-Surfaces the console's own diagnostics report (RXCHECK), firmware version
-(NVER), and barometer calibration (BARDATA) - all previously wired up in
-client.py but never exposed anywhere - alongside the last polled data, via
-Home Assistant's built-in "Download diagnostics" feature (Settings >
-Devices & services > this integration > the failed/ok entry > Download
-diagnostics).
-"""
+"""Diagnostics support for Davis Vantage."""
 from __future__ import annotations
 
 from typing import Any
@@ -28,8 +20,7 @@ from .const import (
     CONF_USE_LOOP2,
 )
 
-# Station latitude/longitude are personal location data - redact them from
-# any diagnostics dump a user might attach to a public GitHub issue.
+# Latitude/longitude are personal location data; keep them out of shared dumps.
 TO_REDACT = {
     "Latitude",
     "Longitude",
@@ -42,13 +33,7 @@ TO_REDACT = {
 
 
 async def _try_console_command(func: Callable[[], Awaitable[str]]) -> str:
-    """Run a console round-trip, degrading to an error string on failure.
-
-    Diagnostics are frequently downloaded *because* the console is
-    unreachable - a raised exception here would take out the whole
-    diagnostics payload (config, last polled data, raw bytes) along with
-    it, when all of that is still useful without the live console replies.
-    """
+    """Run a console round-trip, degrading to an error string on failure."""
     try:
         return (await func()).strip()
     except Exception as err:

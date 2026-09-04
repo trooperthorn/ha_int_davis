@@ -1,82 +1,134 @@
-"""Build a deterministic HACS release archive for the Davis Vantage integration.
+#!/usr/bin/env python3
+"""Validate shipped versions and build the deterministic HACS release archive.
 
-Used by .github/workflows/release.yml, which auto-computes the next
-calendar version (see that workflow for the v<YYYY.MM.DD>.<build> scheme),
-writes it into manifest.json with --set-version, and builds the archive HACS
-installs from GitHub Releases. Runnable locally for a dry run:
+Reads ``.release.json`` through ``scripts.release_config``. ``validate_versions``
+is the independent reader the release gate relies on; the writer is
+``set_version.py``. Stable ordering, timestamps, permissions, and compression
+make the same source tree produce the same SHA-256 digest on every runner.
 
-    python3 scripts/build_release_artifacts.py --output dist/davis_vantage.zip
+Usage:
+    python -m scripts.build_release_artifacts --validate-only
+    python -m scripts.build_release_artifacts --output dist/davis_vantage.zip
 """
+
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import zipfile
 from pathlib import Path
+import stat
+import sys
+import zipfile
 
-INTEGRATION_DIR = Path("custom_components/davis_vantage")
-MANIFEST_PATH = INTEGRATION_DIR / "manifest.json"
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts import release_config  # noqa: E402
+from scripts.release_config import ReleaseConfig, load  # noqa: E402
 
-def read_version(repo_root: Path) -> str:
-    """Return the version currently recorded in manifest.json."""
-    manifest = json.loads((repo_root / MANIFEST_PATH).read_text(encoding="utf-8"))
-    version = manifest.get("version")
-    if not version:
-        raise SystemExit(f"{MANIFEST_PATH} has no 'version' field")
-    return version
-
-
-def write_version(repo_root: Path, version: str) -> None:
-    """Set manifest.json's version field, preserving every other key as-is."""
-    path = repo_root / MANIFEST_PATH
-    manifest = json.loads(path.read_text(encoding="utf-8"))
-    manifest["version"] = version
-    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+_FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
+_SKIP_PARTS = {"__pycache__", "node_modules"}
 
 
-def build_archive(repo_root: Path, output: Path) -> None:
-    """Zip custom_components/davis_vantage/ deterministically for HACS.
+def _config(target: Path | ReleaseConfig) -> ReleaseConfig:
+    return target if isinstance(target, ReleaseConfig) else load(Path(target))
 
-    HACS installs the archive with its top-level entries treated as the
-    integration's own files (no custom_components/davis_vantage/ prefix), and
-    a fixed mtime + sorted file order keep the archive's bytes reproducible
-    build-to-build for the same source tree, which is what the SBOM/
-    attestation step signs against.
-    """
-    source = repo_root / INTEGRATION_DIR
-    output.parent.mkdir(parents=True, exist_ok=True)
-    files = sorted(
-        p for p in source.rglob("*") if p.is_file() and "__pycache__" not in p.parts
+
+def validate_versions(target: Path | ReleaseConfig) -> str:
+    """Return the single shipped version or raise on drift or bad format."""
+    return release_config.validate_versions(_config(target))
+
+
+def _release_files(source: Path) -> list[Path]:
+    return sorted(
+        (
+            path
+            for path in source.rglob("*")
+            if path.is_file()
+            and not _SKIP_PARTS.intersection(path.relative_to(source).parts)
+            and path.suffix not in {".pyc", ".pyo"}
+        ),
+        key=lambda path: path.relative_to(source).as_posix(),
     )
-    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-        for file_path in files:
-            arcname = file_path.relative_to(source)
-            info = zipfile.ZipInfo(str(arcname))
-            info.date_time = (1980, 1, 1, 0, 0, 0)
+
+
+def _archive_label(source: Path) -> str:
+    """Return the integration's display name, falling back to the directory."""
+    manifest = source / "manifest.json"
+    if manifest.exists():
+        name = json.loads(manifest.read_text(encoding="utf-8")).get("name")
+        if isinstance(name, str) and name.isascii():
+            return name
+    return source.name
+
+
+def build_archive(target: Path | ReleaseConfig, output: Path) -> tuple[str, str]:
+    """Write the archive and return ``(version, sha256)``."""
+    config = _config(target)
+    version = validate_versions(config)
+    if not config.archive_source:
+        raise ValueError(".release.json has no archive section")
+    source = config.repository / config.archive_source
+    files = _release_files(source)
+    if not files or source / "manifest.json" not in files:
+        raise ValueError("Release source is empty or missing manifest.json")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(
+        output,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+        strict_timestamps=True,
+    ) as archive:
+        archive.comment = f"{_archive_label(source)} {version}".encode("ascii")
+        for path in files:
+            relative = path.relative_to(source).as_posix()
+            info = zipfile.ZipInfo(relative, date_time=_FIXED_ZIP_TIME)
+            info.create_system = 3
+            executable = bool(path.stat().st_mode & stat.S_IXUSR)
+            info.external_attr = (0o100755 if executable else 0o100644) << 16
             info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o644 << 16
-            archive.writestr(info, file_path.read_bytes())
+            info.flag_bits |= 0x800  # UTF-8 file names
+            archive.writestr(info, path.read_bytes(), compresslevel=9)
+    return version, hashlib.sha256(output.read_bytes()).hexdigest()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", required=True, type=Path)
+def main() -> int:
+    parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--set-version",
-        metavar="VERSION",
-        help="Write this version into manifest.json before building.",
+        "--repository",
+        type=Path,
+        default=Path(__file__).resolve().parents[1],
+        help="repository root (defaults to this script's repository)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="archive path; defaults to dist/<archive name>",
+    )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="print the shipped version and exit",
     )
     args = parser.parse_args()
-
-    repo_root = Path.cwd()
-    if args.set_version:
-        write_version(repo_root, args.set_version)
-
-    version = read_version(repo_root)
-    print(f"Building davis_vantage.zip for version {version}")
-    build_archive(repo_root, args.output)
+    config = load(args.repository)
+    if args.validate_only:
+        print(validate_versions(config))
+        return 0
+    output = args.output or (
+        config.repository / "dist" / (config.archive_name or "release.zip")
+    )
+    if not output.is_absolute():
+        output = config.repository / output
+    version, digest = build_archive(config, output)
+    print(f"archive={output}")
+    print(f"version={version}")
+    print(f"sha256={digest}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
