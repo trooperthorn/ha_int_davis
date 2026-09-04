@@ -108,6 +108,9 @@ When more than one Davis entry exists, pass its `entry_id` to an action so the r
 
 ## Diagnostics and release qualification
 
+Design rationale, console protocol facts, operations, and dated decisions live under
+`docs/`; start at [`docs/README.md`](docs/README.md).
+
 Downloaded diagnostics omit the connection endpoint, credentials, raw EEPROM contents, and raw packet bytes. They include connection state, detected baud, LOOP2 capability and selection, last success/failure, failure streak, reconnect count, and the result of the most recent close.
 
 Automated release gates run against the exact declared Home Assistant version and include pytest, ruff, mypy, hassfest, and HACS validation. CI success is automated evidence only; it is not live console qualification.

@@ -292,9 +292,7 @@ class DavisServicesSetup:
         return {"data": data}
 
     async def set_eeprom(self, call: ServiceCall) -> None:
-        """Set EEPROM service (advanced use - see the manual's EEPROM address
-        table before writing; some locations are factory calibration values
-        that should never be written)."""
+        """Set EEPROM service (advanced use)."""
         client = self._client_for_call(call)
         await client.async_set_eeprom(call.data["address"], call.data["data"])
 

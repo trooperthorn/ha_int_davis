@@ -1,57 +1,40 @@
-name: Release gates
+# Lint, type check, and the pytest suite; release.yml calls this workflow so
+# the same jobs gate every release.
+name: Test
 
 on:
   push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
   workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   pytest:
+    name: pytest (Python 3.14)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.14"]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install test dependencies
-        # The released HA pytest fixture package currently declares the 2026.9
-        # beta. Install its fixtures first, then enforce the stable HA runtime
-        # and serialx versions exercised by this integration.
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements_test.txt
+      # The harness pin (0.13.363) itself pins core 2026.9.0; the assert
+      # proves a harness bump did not silently move the core.
+      - name: Install the test harness
+        run: pip install -r requirements_test.txt
+      - name: Verify runtime versions
         run: |
-          pip install pytest-homeassistant-custom-component==0.13.362
-          pip install -r requirements_test.txt
-
-      - name: Verify runtime dependency versions
-        run: |
-          python -c "from importlib.metadata import version; assert version('homeassistant') == '2026.9.0'"
+          python -c "from importlib.metadata import version; import sys; assert version('homeassistant') == '2026.9.0'; assert sys.version_info[:2] == (3, 14)"
           python -c "from importlib.metadata import version; assert version('serialx') == '1.9.0'"
-
-      - name: Run tests
-        run: pytest tests/ -v
-
       - name: Lint
-        run: ruff check custom_components/davis_vantage tests
-
+        run: ruff check custom_components/davis_vantage tests scripts
       - name: Type check
         run: mypy --python-version 3.14 custom_components/davis_vantage/
-
-  hassfest:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: home-assistant/actions/hassfest@master
-
-  hacs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hacs/action@main
-        with:
-          category: integration
+      - name: Run the suite
+        run: pytest tests/ -v
+      - name: Validate the release version fields
+        run: python3 scripts/build_release_artifacts.py --validate-only

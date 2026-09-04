@@ -9,8 +9,7 @@ trigger:
     entity_id: binary_sensor.davis_vantage_is_raining
     to: "on"
 condition:
-  # Replace with the actual window/door/cover entity_ids you want covered.
-  # This fires only if at least one of them is currently open.
+  # Replace with your own window/door/cover entity_ids.
   - condition: state
     entity_id:
       - binary_sensor.living_room_window
@@ -26,9 +25,7 @@ action:
         window, door, or cover appears to be open.
       data:
         priority: high
-  # Uncomment to auto-close motorized covers instead of (or in addition to)
-  # just notifying. Only covers actually support "close" - a plain window/
-  # door binary_sensor can't be closed by automation.
+  # Optional: uncomment to auto-close covers (a binary_sensor cannot be closed).
   # - action: cover.close_cover
   #   target:
   #     entity_id: cover.garage_door

@@ -1,0 +1,9 @@
+{
+  "tag_prefix": "v",
+  "timezone": "America/Chicago",
+  "archive": {"source": "custom_components/davis_vantage", "name": "davis_vantage.zip"},
+  "release_paths": ["custom_components/davis_vantage"],
+  "version_fields": [
+    {"path": "custom_components/davis_vantage/manifest.json", "kind": "json", "key": "version"}
+  ]
+}

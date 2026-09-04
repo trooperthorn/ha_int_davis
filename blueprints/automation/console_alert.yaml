@@ -6,7 +6,6 @@ trigger:
     entity_id: sensor.davis_vantage_barometric_trend
     to: "falling_rapidly"
 action:
-  # Turn on the console backlight
   - action: davis_vantage.set_console_lamps
     data:
       state: true

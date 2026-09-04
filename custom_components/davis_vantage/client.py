@@ -130,12 +130,8 @@ class DavisSerialXLink:
 class LoopData2Parser(LoopDataParserRevB):
     """Parse a LOOP2 packet, sent by the "LPS 2 1" command.
 
-    PyVantagePro only implements the LOOP1 packet format, so this mirrors
-    LoopDataParserRevB's approach (byte layout + unit scaling) for LOOP2,
-    per the Davis Vantage Serial Communication Reference Manual Rev 2.6.1
-    (section IX.2). Subclasses LoopDataParserRevB purely to reuse its
-    unpack_storm_date()/unpack_time() helpers; its LOOP1 __init__ is
-    intentionally not called.
+    Subclasses LoopDataParserRevB only for its unpack helpers; its LOOP1
+    __init__ is intentionally not called.
     """
 
     LOOP2_FORMAT = (
@@ -187,8 +183,7 @@ class LoopData2Parser(LoopDataParserRevB):
     )
 
     def __init__(self, data: bytes) -> None:
-        # Deliberately skip LoopDataParserRevB.__init__ (LOOP1 format) and
-        # go straight to the base DataParser with our own LOOP2 format.
+        # Skip LoopDataParserRevB.__init__ (LOOP1 layout); use the LOOP2 format directly.
         DataParser.__init__(self, data, self.LOOP2_FORMAT, order="<")
 
         self["Barometer"] = self["Barometer"] / 1000
@@ -209,9 +204,7 @@ class LoopData2Parser(LoopDataParserRevB):
         self["ETDay"] = self["ETDay"] / 1000
         self["RainLast24Hr"] = self["RainLast24Hr"] / 100
 
-        # LOOP2 carries no alarm bits, battery status, forecast icon, or
-        # sunrise/sunset (those are LOOP1-only). Fill them in as None so
-        # downstream code that expects the keys doesn't KeyError.
+        # LOOP1-only keys are filled with None so downstream lookups do not KeyError.
         self["SunRise"] = None
         self["SunSet"] = None
 
@@ -245,8 +238,7 @@ class DavisVantageClient:
         self._persistent_connection = persistent_connection
         self._use_loop2 = use_loop2
         self._baud_rate = baud_rate or DEFAULT_BAUD_RATE
-        # One entry owns one single-worker executor. Cancelling an HA waiter
-        # never cancels or releases ownership of the blocking Davis operation.
+        # Single-worker executor per entry; cancelling an HA waiter never releases the device.
         self._executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="davis-vantage"
         )
@@ -435,10 +427,7 @@ class DavisVantageClient:
         except Exception as e:
             _LOGGER.error("Couldn't get hilows: %s", e)
             
-        # LOOP2 already carries a rolling 10-min wind gust + average natively
-        # (see add_loop2_wind_info), so the archive fetch below - otherwise
-        # needed purely to derive gust/average wind from DMPAFT - would just
-        # be a redundant round trip. Skip it in LOOP2 mode.
+        # LOOP2 already carries 10-min gust and average; the archive fetch is LOOP1-only.
         if not self._use_loop2:
             try:
                 end_datetime = datetime.now()
@@ -452,9 +441,7 @@ class DavisVantageClient:
                 _LOGGER.debug("Skipping archive sync (non-fatal serial/encoding hiccup): %s", e)
                 archives = None
 
-        # The rain collector type rarely changes and reading it costs an extra
-        # wake-up + serial round trip. Fetch it once and reuse the cached value
-        # on subsequent polls to keep per-poll latency down.
+        # Cached: reading the collector type costs an extra wake-up round trip.
         if not self._rain_collector:
             try:
                 _LOGGER.debug("Start get_rain_collector")
@@ -528,10 +515,7 @@ class DavisVantageClient:
         return data
 
     def __get_full_raw_data(self, data):
-        # LOOP1 and LOOP2 packets have different byte layouts (see
-        # LoopData2Parser) - always parsing with the LOOP1 format here would
-        # silently misinterpret LOOP2 bytes and could corrupt the
-        # incorrect-value masking done downstream in remove_all_incorrect_data.
+        # LOOP1 and LOOP2 layouts differ; the wrong format corrupts the masking downstream.
         if self._use_loop2:
             raw_data = DataParser(data.raw_bytes, LoopData2Parser.LOOP2_FORMAT)
             raw_data["_raw_bytes"] = data.raw_bytes
@@ -551,7 +535,6 @@ class DavisVantageClient:
         raw_data.tuple_to_dict("LeafWetness")
         raw_data.tuple_to_dict("SoilMoist")
 
-        # EXPOSE RAW BYTES FOR HARDWARE DIAGNOSTICS
         raw_data["_raw_bytes"] = data.raw_bytes
 
         return raw_data
@@ -560,7 +543,6 @@ class DavisVantageClient:
         raw_data = DataParser(data.raw_bytes, HighLowParserRevB.HILOWS_FORMAT)  
         return raw_data
 
-    # --- DEVICE ACTION METHODS ---
     async def _async_send_console_command(
         self, command: str, expected: bytes, *, response_size: int = 256
     ) -> str:
@@ -612,13 +594,7 @@ class DavisVantageClient:
     async def async_set_barometer_calibration(
         self, elevation_ft: int, bar_inhg: float = 0.0
     ) -> str:
-        """Set the barometer/elevation offset (BAR= command, manual sec. VIII.5).
-
-        `bar_inhg`: a known-good local barometer reading (20.000-32.500 inHg)
-        to fine-tune the console's own adjusted-pressure calculation, or 0 to
-        clear any existing offset. `elevation_ft`: station elevation
-        (-2000 to 15000 ft) - the primary correction, always required.
-        """
+        """Set the barometer/elevation offset (BAR= command, manual sec. VIII.5)."""
         bar_value = 0 if bar_inhg == 0 else round(bar_inhg * 1000)
         cmd = f"BAR={bar_value} {elevation_ft}\n"
         return await self._async_send_console_command(cmd, b"\n\rOK\n\r")
@@ -643,11 +619,7 @@ class DavisVantageClient:
     def set_eeprom(self, address_hex: str, data: bytes) -> None:
         """Write `data` to EEPROM starting at `address_hex` (manual sec. XIII).
 
-        Advanced/expert use only: several EEPROM locations are factory
-        calibration values that should never be written (see the manual's
-        EEPROM address table), and writing the wrong bytes to the wrong
-        address can corrupt console settings. There is no hardware
-        protection against this - the console will accept whatever is sent.
+        The console has no write protection; validate_eeprom_write is the only guard.
         """
         if not self._vantagepro2:
             self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
@@ -663,15 +635,10 @@ class DavisVantageClient:
         """Write a hex string of bytes to EEPROM starting at `address_hex`."""
         data = bytes.fromhex(data_hex)
         await self._async_run_io(self.set_eeprom, address_hex, data)
-    # -----------------------------
 
     def add_additional_info(self, data: dict[str, Any]) -> None:
         assert self._vantagepro2 is not None  # only called from async_get_current_data(), after get_current_data() connects
-        # LOOP2 packets already carry console-computed DewPoint, HeatIndex,
-        # and WindChill (LoopData2Parser) - prefer those over the client-side
-        # formulas below rather than clobbering real values with estimates.
-        # LOOP1 has none of these, so they're always None going in and the
-        # formulas fill them in as before.
+        # LOOP2 supplies DewPoint, HeatIndex and WindChill; only compute them when None (LOOP1).
         if data.get("TempOut") is not None:
             if data.get("HumOut") is not None:
                 if data.get("HeatIndex") is None:
@@ -682,16 +649,13 @@ class DavisVantageClient:
                 if data.get("WindChill") is None:
                     data["WindChill"] = calc_wind_chill(data["TempOut"], data["WindSpeed"])
                 if data.get("HumOut") is not None:
-                    # THSW (Temp-Humidity-Sun-Wind) is Davis's own "feels
-                    # like" figure and is strictly better than the generic
-                    # calc_feels_like() estimate when LOOP2 provides it.
+                    # Prefer the console's THSW over the client-side estimate when LOOP2 provides it.
                     data["FeelsLike"] = data.get("THSWIndex")
                     if data["FeelsLike"] is None:
                         data["FeelsLike"] = calc_feels_like(
                             data["TempOut"], data["HumOut"], data["WindSpeed"]
                         )
                     
-        # --- ROBUST WIND DIRECTION & ROSE SYNC FIX ---
         wind_dir = data.get("WindDir")
         wind_speed = data.get("WindSpeed", 0)
 
@@ -718,22 +682,13 @@ class DavisVantageClient:
             if wind_speed == 0:
                 data["WindDir"] = 0
                 data["WindDirRose"] = "n"
-        # ---------------------------------------------
-        
-        # --- HARDWARE DIAGNOSTICS & ALARMS ---
-        # PyVantagePro's LOOP1 parser already decodes these into named fields
-        # (see LoopDataParserRevB.__init__ in the pyvantagepro fork) - no need
-        # to re-derive them from raw byte offsets. LOOP2 packets don't carry
-        # battery status, alarm bits, or a forecast icon at all (see the
-        # Rev 2.6.1 manual's LOOP2 packet layout), so these are simply absent
-        # (None) from `data` in that mode, which downstream bool()/get() calls
-        # already handle.
+
+        # Battery status, alarm bits and forecast icon are LOOP1-only; None in LOOP2 mode.
         data["TransmitterBatteryStatus"] = data.get("BatteryStatus")
         data["ConsoleBatteryVoltage"] = data.get("BatteryVolts")
         data["FlashFloodAlarm"] = bool(data.get("AlarmRain15min"))
         data["StormRainAlarm"] = bool(data.get("AlarmRainStormTotal"))
         data["THSWAlarm"] = bool(data.get("AlarmOutHighTHSW"))
-        # ------------------------------------------------
 
         if data.get("RainRate") is not None:
             data["IsRaining"] = data["RainRate"] > 0
@@ -743,7 +698,6 @@ class DavisVantageClient:
         data["Longitude"] = self.longitude
         data["Elevation"] = self.elevation
 
-    # ... [Keep all your other existing methods exactly as they are: convert_values, correct_rain_values, etc.]
     def convert_values(self, data: dict[str, Any]) -> None:
         del data["Datetime"]
         if data["BarTrend"] is not None:
@@ -814,13 +768,7 @@ class DavisVantageClient:
             )
 
     def add_loop2_wind_info(self, data: dict[str, Any]):
-        """Populate gust/average wind fields directly from a LOOP2 packet.
-
-        LOOP2 already carries a rolling 10-minute wind gust and average
-        (see LoopData2Parser), which is what add_archive_info() otherwise
-        derives from a DMPAFT archive fetch - so this replaces that round
-        trip in LOOP2 mode instead of duplicating it.
-        """
+        """Populate gust/average wind fields directly from a LOOP2 packet."""
         wind_gust = data.get("WindGust10Min")
         wind_avg = data.get("WindSpeed10Min")
         wind_gust_dir = data.get("WindGustDir10Min")
@@ -830,9 +778,7 @@ class DavisVantageClient:
         if wind_avg is not None:
             data["WindSpeedAvg"] = wind_avg
             data["WindSpeedBft"] = convert_kmh_to_bft(convert_to_kmh(wind_avg))
-        # LOOP2 has no true 10-minute *average* direction field, only the
-        # direction of the 10-minute gust - expose it under its own name
-        # rather than mislabeling it as "WindAvgDir".
+        # LOOP2 has no 10-minute average direction, only the gust direction; not WindAvgDir.
         if wind_gust_dir not in (None, 0, 32767):
             data["WindGustDir"] = wind_gust_dir
             rose = get_wind_rose(wind_gust_dir)
@@ -892,12 +838,7 @@ class DavisVantageClient:
             return datetime.strptime(date_str, "%Y-%m-%d").date()
 
     def clear_cached_property(self, property_name: str) -> None:
-        """Invalidate a functools.cached_property on the underlying VantagePro2.
-
-        Safe to call even if the property was never accessed yet (nothing
-        cached) or no connection has been made yet (_vantagepro2 is None) -
-        the caller only wants "make sure it's not stale", not an error.
-        """
+        """Invalidate a functools.cached_property on the underlying VantagePro2."""
         if self._vantagepro2 is not None:
             self._vantagepro2.__dict__.pop(property_name, None)
 
@@ -939,7 +880,7 @@ class DavisVantageClient:
             self._vantagepro2.set_rain_collector(
                 rain_collector_map.get(rain_collector, 0x00)
             )
-            # Invalidate the cache so the next poll re-reads the new setting.
+            # Drop the cached collector type so the next poll re-reads it.
             self._rain_collector = ""
         finally:
             if self._should_close_after_transaction():
@@ -1102,14 +1043,7 @@ class DavisVantageClient:
             self._connection_state = CONNECTION_STOPPING
 
     async def async_cancel_shutdown(self) -> None:
-        """Resume normal operation after a begun shutdown was aborted.
-
-        Used when async_begin_shutdown() ran but the platform unload it was
-        guarding then failed, so async_close() never followed - without this,
-        _stopping would stay True forever and every future poll would raise
-        "Davis transport is stopping" even though HA still considers the
-        entry loaded.
-        """
+        """Resume normal operation after a begun shutdown was aborted."""
         async with self._submit_lock:
             if self._executor_shutdown:
                 return

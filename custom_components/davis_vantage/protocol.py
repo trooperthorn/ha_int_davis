@@ -27,8 +27,7 @@ from pyvantagepro.parser import (
 VALID_ARCHIVE_PERIODS = frozenset({1, 5, 10, 15, 30, 60, 120})
 EEPROM_SIZE = 0x1000
 
-# Davis identifies these fields as factory calibration data that must not be
-# changed, or as settings that must be changed through a dedicated command.
+# Factory calibration or command-managed fields; see docs/protocol.md.
 _PROTECTED_EEPROM_RANGES: tuple[tuple[int, int, str], ...] = (
     (0x01, 0x04, "factory barometer calibration"),
     (0x05, 0x06, "BAR= managed barometer calibration"),
@@ -170,12 +169,9 @@ def apply_loop1_alarm_bits(data: Any, raw: bytes) -> None:
 
 
 def _alarm_safe_loop1_frame(raw: bytes) -> bytes:
-    """Return a parser-safe copy while retaining separately decoded alarms.
+    """Return a parser-safe copy with the alarm bytes (70-85) zeroed.
 
-    PyVantagePro's Python 3 alarm decoder iterates nonzero integer values and
-    raises ``TypeError``.  Its bit order is also the reverse of the Davis
-    definition.  CRC and envelope validation has already been performed on
-    the original frame, so zero only those bytes for the legacy field parser.
+    The upstream alarm decoder raises TypeError on Python 3 and uses reversed bit order.
     """
     parser_frame = bytearray(raw)
     parser_frame[70:86] = bytes(16)
@@ -319,8 +315,7 @@ class DavisProtocolClient(VantagePro2):
                     stop_download = True
                     break
                 if record_time > start:
-                    # Preserve the manufacturer's raw click semantics and avoid
-                    # the upstream parser's offset-10 RainRate misnaming.
+                    # Raw click counts; the upstream parser misnames offset 10 as RainRate.
                     record["Rainfall"] = int.from_bytes(
                         raw_record[10:12], "little", signed=False
                     )

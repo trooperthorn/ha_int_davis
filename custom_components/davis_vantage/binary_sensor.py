@@ -22,8 +22,6 @@ from .const import DEFAULT_NAME
 from .coordinator import DavisVantageDataUpdateCoordinator
 from .utils import normalize_unique_id
 
-# All entities read from the shared coordinator's already-polled data rather
-# than doing their own I/O, so there's nothing for HA to serialize here.
 PARALLEL_UPDATES = 0
 
 
@@ -41,7 +39,7 @@ def _evaluate_is_raining(data: dict[str, Any]) -> bool:
 
 def _evaluate_tx_battery(data: dict[str, Any]) -> bool:
     """Safely check transmitter battery status (1 = low battery)."""
-    # LOOP Byte 86: 1 means low battery, 0 means normal.
+    # LOOP1 byte 86: 1 = low battery, 0 = normal.
     return bool(data.get("TransmitterBatteryStatus"))
 
 
@@ -50,7 +48,7 @@ def _evaluate_iss_connection(data: dict[str, Any]) -> bool:
     temp = data.get("TempOut")
     wind = data.get("WindSpeed")
     
-    # 255, 32767, and -32768 are Davis protocol dashes/invalid values
+    # 255, 32767 and -32768 are Davis dash values.
     temp_valid = temp is not None and temp not in (255, 32767, 32768, -32768, "")
     wind_valid = wind is not None and wind not in (255, 32767, 32768, -32768, "")
     
@@ -58,7 +56,6 @@ def _evaluate_iss_connection(data: dict[str, Any]) -> bool:
 
 
 BINARY_SENSOR_TYPES: tuple[DavisBinarySensorEntityDescription, ...] = (
-    # --- Standard Binary Sensors ---
     DavisBinarySensorEntityDescription(
         key="is_raining",
         translation_key="is_raining",
@@ -66,8 +63,7 @@ BINARY_SENSOR_TYPES: tuple[DavisBinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.MOISTURE,
         value_fn=_evaluate_is_raining,
     ),
-    
-    # --- Hardware Alarms (Prominent / Dashboard Level) ---
+
     DavisBinarySensorEntityDescription(
         key="flash_flood_alarm",
         translation_key="flash_flood_alarm",
@@ -90,7 +86,6 @@ BINARY_SENSOR_TYPES: tuple[DavisBinarySensorEntityDescription, ...] = (
         value_fn=lambda data: bool(data.get("THSWAlarm")),
     ),
 
-    # --- Diagnostics ---
     DavisBinarySensorEntityDescription(
         key="tx_battery_status",
         translation_key="tx_battery_status",
@@ -117,7 +112,6 @@ async def async_setup_entry(
     coordinator = config_entry.runtime_data.coordinator
     entity_registry = async_get_entity_registry(hass)
 
-    # Migrate old unique_ids with spaces or brackets to new ones with underscores
     for desc in BINARY_SENSOR_TYPES:
         if desc.key:
             old_unique_id = f"{config_entry.entry_id}-{DEFAULT_NAME} {desc.key}"
@@ -132,7 +126,6 @@ async def async_setup_entry(
 
     entities: list[DavisVantageBinarySensor] = []
 
-    # Add all binary sensors described above.
     for description in BINARY_SENSOR_TYPES:
         entities.append(
             DavisVantageBinarySensor(
@@ -150,7 +143,6 @@ class DavisVantageBinarySensor(
 ):
     """Defines a Davis Vantage binary sensor."""
 
-    # Tells Home Assistant to use the device name + translation_key
     _attr_has_entity_name = True
     entity_description: DavisBinarySensorEntityDescription
 
