@@ -4,28 +4,27 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from pyvantagepro.utils import bytes_to_hex
 
 from .const import (
     DOMAIN,
-    SERVICE_SET_DAVIS_TIME,
-    SERVICE_GET_DAVIS_TIME,
-    SERVICE_GET_RAW_DATA,
-    SERVICE_SET_YEARLY_RAIN,
-    SERVICE_SET_ARCHIVE_PERIOD,
-    SERVICE_SET_RAIN_COLLECTOR,
-    SERVICE_SET_BAROMETER_CALIBRATION,
-    SERVICE_GET_EEPROM,
-    SERVICE_SET_EEPROM,
-    SERVICE_SET_CONSOLE_LAMPS,
-    SERVICE_CLEAR_ALARMS,
-    SERVICE_GET_INFO,
     RAIN_COLLECTOR_IMPERIAL,
     RAIN_COLLECTOR_METRIC,
     RAIN_COLLECTOR_METRIC_0_1,
+    SERVICE_CLEAR_ALARMS,
+    SERVICE_GET_DAVIS_TIME,
+    SERVICE_GET_EEPROM,
+    SERVICE_GET_INFO,
+    SERVICE_GET_RAW_DATA,
+    SERVICE_SET_ARCHIVE_PERIOD,
+    SERVICE_SET_BAROMETER_CALIBRATION,
+    SERVICE_SET_CONSOLE_LAMPS,
+    SERVICE_SET_DAVIS_TIME,
+    SERVICE_SET_EEPROM,
+    SERVICE_SET_RAIN_COLLECTOR,
+    SERVICE_SET_YEARLY_RAIN,
 )
 from .coordinator import DataUpdateCoordinator
 from .utils import convert_to_iso_datetime

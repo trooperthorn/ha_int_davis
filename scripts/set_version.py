@@ -13,18 +13,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime
 import json
-from pathlib import Path
 import re
 import subprocess
 import sys
+from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.release_config import (  # noqa: E402
+from scripts.release_config import (
     CALVER_RE,
     ReleaseConfig,
     load,

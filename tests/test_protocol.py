@@ -1,7 +1,7 @@
 """Wire-level tests for the Davis Rev. 2.6.1 protocol contract."""
 
-from datetime import datetime
 import struct
+from datetime import datetime
 
 import pytest
 from pyvantagepro.device import BadCRCException, BadDataException

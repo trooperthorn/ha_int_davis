@@ -16,16 +16,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import stat
 import sys
 import zipfile
+from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts import release_config  # noqa: E402
-from scripts.release_config import ReleaseConfig, load  # noqa: E402
+from scripts import release_config
+from scripts.release_config import ReleaseConfig, load
 
 _FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 _SKIP_PARTS = {"__pycache__", "node_modules"}

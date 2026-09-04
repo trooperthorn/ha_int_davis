@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import contextlib
 import os
-from pathlib import Path
 import socket
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from pyvantagepro.device import VantageProCRC
@@ -163,10 +164,8 @@ def _serial_identity(endpoint: str) -> tuple[str, str, str]:
         for port in comports():
             matches = port.device == endpoint
             if not matches and endpoint_resolved is not None:
-                try:
+                with contextlib.suppress(OSError):
                     matches = Path(port.device).resolve(strict=False) == endpoint_resolved
-                except OSError:
-                    pass
             if not matches:
                 continue
             serial_number = getattr(port, "serial_number", None)
@@ -255,10 +254,8 @@ def verify_serial(endpoint: str) -> VerificationResult:
             last_error = err
         finally:
             if serial_port is not None:
-                try:
+                with contextlib.suppress(OSError):
                     serial_port.close()
-                except OSError:
-                    pass
 
     if not opened and last_error is not None:
         raise DavisCannotConnectError(str(last_error)) from last_error

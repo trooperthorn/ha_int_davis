@@ -1,7 +1,8 @@
 import math
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from typing import Any
+from zoneinfo import ZoneInfo
+
 
 def convert_to_celcius(value: float) -> float:
     return round((value - 32.0) * (5.0/9.0), 1)
@@ -37,7 +38,7 @@ def convert_ms_to_bft(windspeed: float) -> int:
         return 4
     elif windspeed < 10.8:
         return 5
-    elif windspeed < 13.9: 
+    elif windspeed < 13.9:
         return 6
     elif windspeed < 17.2:
         return 7
@@ -152,7 +153,7 @@ def get_baro_trend(trend: int) -> str | None:
     else:
         return None
 
-def get_uv(value: int) -> float:
+def get_uv(value: float) -> float:
     return round(value, 1)
 
 def get_solar_rad(value: int) -> float:

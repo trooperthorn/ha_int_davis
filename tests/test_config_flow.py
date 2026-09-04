@@ -3,12 +3,12 @@
 from unittest.mock import patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
 from homeassistant.config_entries import SOURCE_RECONFIGURE
 from homeassistant.helpers.selector import SerialPortSelector
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.davis_vantage.const import (
+    CONF_USE_LOOP2,
     CONFIG_BAUD_RATE,
     CONFIG_IDENTITY,
     CONFIG_IDENTITY_SOURCE,
@@ -18,7 +18,6 @@ from custom_components.davis_vantage.const import (
     CONFIG_LOOP2_SUPPORTED,
     CONFIG_PERSISTENT_CONNECTION,
     CONFIG_PROTOCOL,
-    CONF_USE_LOOP2,
     DOMAIN,
     IDENTITY_STRONG,
     IDENTITY_WEAK,

@@ -1,35 +1,36 @@
 """The Davis Vantage integration."""
 
 from __future__ import annotations
-from dataclasses import dataclass
+
 import logging
+from dataclasses import dataclass
 from uuid import uuid4
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers import issue_registry as ir
 from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.device_registry import DeviceInfo
 
 from .client import DavisVantageClient
 from .const import (
-    DOMAIN,
-    NAME,
-    MANUFACTURER,
-    CONFIG_STATION_MODEL,
-    CONFIG_INTERVAL,
-    CONFIG_PROTOCOL,
-    CONFIG_LINK,
-    CONFIG_PERSISTENT_CONNECTION,
+    CONF_USE_LOOP2,
     CONFIG_BAUD_RATE,
     CONFIG_IDENTITY,
     CONFIG_IDENTITY_SOURCE,
     CONFIG_IDENTITY_STRENGTH,
+    CONFIG_INTERVAL,
+    CONFIG_LINK,
     CONFIG_LOOP2_SUPPORTED,
-    CONF_USE_LOOP2,
+    CONFIG_PERSISTENT_CONNECTION,
+    CONFIG_PROTOCOL,
+    CONFIG_STATION_MODEL,
     DEFAULT_BAUD_RATE,
+    DOMAIN,
     IDENTITY_STRONG,
+    MANUFACTURER,
+    NAME,
 )
 from .coordinator import DavisVantageDataUpdateCoordinator
 from .services import async_setup_services
@@ -124,7 +125,7 @@ async def async_setup_entry(
 
     protocol = config_entry.data.get(CONFIG_PROTOCOL, "")
     link = config_entry.data.get(CONFIG_LINK, "")
-    
+
     persistent_connection = config_entry.options.get(
         CONFIG_PERSISTENT_CONNECTION, False
     )
@@ -170,9 +171,9 @@ async def async_setup_entry(
     )
 
     coordinator = DavisVantageDataUpdateCoordinator(
-        hass=hass, 
-        client=client, 
-        device_info=device_info, 
+        hass=hass,
+        client=client,
+        device_info=device_info,
         config_entry=config_entry
     )
 
