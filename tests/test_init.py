@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.davis_vantage import async_migrate_entry, async_setup_entry
 from custom_components.davis_vantage.const import (
+    CONF_USE_LOOP2,
     CONFIG_BAUD_RATE,
     CONFIG_IDENTITY,
     CONFIG_IDENTITY_SOURCE,
@@ -22,7 +23,6 @@ from custom_components.davis_vantage.const import (
     CONFIG_LOOP2_SUPPORTED,
     CONFIG_PERSISTENT_CONNECTION,
     CONFIG_PROTOCOL,
-    CONF_USE_LOOP2,
     DOMAIN,
     IDENTITY_WEAK,
     PROTOCOL_SERIAL,
@@ -60,7 +60,7 @@ async def test_first_refresh_failure_closes_connection_before_retry(hass):
         ".async_config_entry_first_refresh",
         new=AsyncMock(side_effect=RuntimeError("console never ACKed")),
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="console never ACKed"):
             await async_setup_entry(hass, entry)
 
         mock_close.assert_awaited_once()

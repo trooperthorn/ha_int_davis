@@ -47,11 +47,11 @@ def _evaluate_iss_connection(data: dict[str, Any]) -> bool:
     """Safely check if the sensor suite is online based on valid telemetry."""
     temp = data.get("TempOut")
     wind = data.get("WindSpeed")
-    
+
     # 255, 32767 and -32768 are Davis dash values.
     temp_valid = temp is not None and temp not in (255, 32767, 32768, -32768, "")
     wind_valid = wind is not None and wind not in (255, 32767, 32768, -32768, "")
-    
+
     return bool(temp_valid or wind_valid)
 
 
@@ -155,7 +155,7 @@ class DavisVantageBinarySensor(
         """Initialize Davis Vantage sensor."""
         super().__init__(coordinator=coordinator)
         self.entity_description = description
-        
+
         self._attr_unique_id = normalize_unique_id(
             f"{entry_id}_{DEFAULT_NAME}_{description.key}"
         )
@@ -166,7 +166,7 @@ class DavisVantageBinarySensor(
         """Return the state of the binary sensor."""
         if not self.coordinator.data:
             return None
-            
+
         try:
             return self.entity_description.value_fn(self.coordinator.data)
         except (KeyError, TypeError, AttributeError):

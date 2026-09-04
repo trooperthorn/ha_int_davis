@@ -40,12 +40,12 @@ class _FakeVantagePro2:
 
 
 def make_client(**kwargs) -> DavisVantageClient:
-    defaults = dict(
-        hass=None,
-        protocol=PROTOCOL_SERIAL,
-        link="/dev/ttyUSB0",
-        persistent_connection=False,
-    )
+    defaults = {
+        "hass": None,
+        "protocol": PROTOCOL_SERIAL,
+        "link": "/dev/ttyUSB0",
+        "persistent_connection": False,
+    }
     defaults.update(kwargs)
     client = DavisVantageClient(**defaults)
     client._vantagepro2 = _FakeVantagePro2()

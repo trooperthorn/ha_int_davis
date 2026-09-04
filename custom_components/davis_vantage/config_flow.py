@@ -7,7 +7,6 @@ from typing import Any
 from uuid import uuid4
 
 import voluptuous as vol
-
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.core import callback
@@ -20,6 +19,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    CONF_USE_LOOP2,
     CONFIG_BAUD_RATE,
     CONFIG_IDENTITY,
     CONFIG_IDENTITY_SOURCE,
@@ -30,7 +30,6 @@ from .const import (
     CONFIG_MINIMAL_INTERVAL,
     CONFIG_PERSISTENT_CONNECTION,
     CONFIG_PROTOCOL,
-    CONF_USE_LOOP2,
     DEFAULT_SYNC_INTERVAL,
     DOMAIN,
     IDENTITY_STRONG,

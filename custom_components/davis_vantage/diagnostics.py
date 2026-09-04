@@ -1,15 +1,15 @@
 """Diagnostics support for Davis Vantage."""
 from __future__ import annotations
 
-from typing import Any
-
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from . import DavisConfigEntry
 from .const import (
+    CONF_USE_LOOP2,
     CONFIG_BAUD_RATE,
     CONFIG_IDENTITY_SOURCE,
     CONFIG_IDENTITY_STRENGTH,
@@ -17,7 +17,6 @@ from .const import (
     CONFIG_LOOP2_SUPPORTED,
     CONFIG_PERSISTENT_CONNECTION,
     CONFIG_PROTOCOL,
-    CONF_USE_LOOP2,
 )
 
 # Latitude/longitude are personal location data; keep them out of shared dumps.

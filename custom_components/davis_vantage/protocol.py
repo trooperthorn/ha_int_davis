@@ -7,9 +7,9 @@ Reference Manual Rev. 2.6.1.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 import struct
 import sys
+from datetime import datetime, timedelta
 from typing import Any
 
 from pyvantagepro import VantagePro2
@@ -22,7 +22,6 @@ from pyvantagepro.parser import (
     pack_dmp_date_time,
     unpack_datetime,
 )
-
 
 VALID_ARCHIVE_PERIODS = frozenset({1, 5, 10, 15, 30, 60, 120})
 EEPROM_SIZE = 0x1000

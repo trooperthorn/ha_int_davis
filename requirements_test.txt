@@ -1,6 +1,6 @@
 pytest-homeassistant-custom-component==0.13.363
 mypy==2.3.1
-ruff==0.12.11
+ruff==0.16.5
 serialx==1.9.0
 aiousbwatcher==1.1.2
 pyvantagepro @ https://github.com/trooperthorn/PyVantagePro/archive/3ff12a6820a25c2458351a16b191da5843e78a63.zip

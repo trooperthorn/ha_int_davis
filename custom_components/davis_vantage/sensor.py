@@ -1,9 +1,9 @@
 """Sensor platform for Davis Vantage."""
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-import logging
 from typing import cast
 
 from homeassistant.components.sensor import (
@@ -14,12 +14,12 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    UnitOfRatio,
     EntityCategory,
     UnitOfElectricPotential,
     UnitOfIrradiance,
     UnitOfLength,
     UnitOfPressure,
+    UnitOfRatio,
     UnitOfSpeed,
     UnitOfTemperature,
     UnitOfVolumetricFlux,
@@ -27,7 +27,6 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,12 +44,12 @@ def get_wind_rose(degrees: float | int | str | None) -> str | None:
     # 255, 32767 and -32768 are Davis dash values, not bearings.
     if degrees is None or degrees in (255, 32767, 32768, -32768):
         return None
-        
+
     try:
         deg = float(degrees)
     except (ValueError, TypeError):
         return None
-        
+
     # Lowercase to match the wind_direction_rose state keys in translations/en.json.
     compass_points = [
         "n", "nne", "ne", "ene", "e", "ese", "se", "sse",
@@ -97,7 +96,7 @@ def _map_forecast_icon(data: dict, mapping: dict[int, str], default: str) -> str
 @dataclass(frozen=True, kw_only=True)
 class DavisSensorEntityDescription(SensorEntityDescription):
     """Class describing Davis Vantage sensor entities."""
-    
+
     value_fn: Callable[[dict], float | int | str | None]
 
 
@@ -470,8 +469,8 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, 
-    entry: ConfigEntry, 
+    hass: HomeAssistant,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator = entry.runtime_data.coordinator
@@ -484,7 +483,7 @@ async def async_setup_entry(
         )
         for description in SENSOR_TYPES
     ]
-    
+
     async_add_entities(entities)
 
 
@@ -498,7 +497,7 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.entity_description = description
-        
+
         self._attr_unique_id = f"{entry_id}_{description.key}"
         self._attr_device_info = coordinator.device_info
         # Latches so a persistently missing value warns once per outage, not per poll.
@@ -508,7 +507,7 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
     def entity_registry_enabled_default(self) -> bool:
         """Disable optional sensors by default if they return no data on startup."""
         optional_keys = ("solar_radiation", "uv_index", "SolarRad", "UV")
-        
+
         if self.entity_description.key in optional_keys:
             if not self.coordinator.data:
                 return False
@@ -517,11 +516,11 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
                 val = self.entity_description.value_fn(self.coordinator.data)
             except (KeyError, TypeError):
                 val = None
-                
+
             # 255 is the Davis dash value for a sensor that is not fitted.
             if val is None or val == 255:
                 _LOGGER.debug(
-                    "Disabling optional sensor '%s' because no initial data was found.", 
+                    "Disabling optional sensor '%s' because no initial data was found.",
                     self.entity_description.key
                 )
                 return False
@@ -533,7 +532,7 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
         """Return the state of the sensor."""
         if not self.coordinator.data:
             return None
-            
+
         try:
             value = self.entity_description.value_fn(self.coordinator.data)
         except (KeyError, TypeError, AttributeError):
@@ -556,11 +555,11 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
             value = None
 
         ignored_null_keys = (
-            "solar_radiation", "uv_index", "SolarRad", "UV", 
+            "solar_radiation", "uv_index", "SolarRad", "UV",
             "wind_direction", "WindDir", "wind_direction_rose", "WindRose",
             "rain_rate", "RainRate"
         )
-        
+
         if value is None and self.entity_description.key not in ignored_null_keys:
             # Warn only on the transition into missing; see docs/design.md.
             if not self._attr_missing_value_logged:

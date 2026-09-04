@@ -1,34 +1,23 @@
 """All client function"""
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-import struct
-import re
-from datetime import datetime, time, date, timedelta
-from typing import TYPE_CHECKING, Any
 import logging
-
+import re
+import struct
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, time, timedelta
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
+
 from pyvantagepro import VantagePro2
 from pyvantagepro.device import BadAckException
 from pyvantagepro.link import link_from_url
-from pyvantagepro.parser import HighLowParserRevB, LoopDataParserRevB, DataParser
+from pyvantagepro.parser import DataParser, HighLowParserRevB, LoopDataParserRevB
 
 if TYPE_CHECKING:
     from serialx import BaseSerial
 
-from .utils import (
-    calc_dew_point,
-    calc_feels_like,
-    calc_wind_chill,
-    calc_heat_index,
-    convert_kmh_to_bft,
-    convert_to_iso_datetime,
-    convert_to_kmh,
-    get_baro_trend,
-    get_solar_rad,
-    get_uv,
-    get_wind_rose,
-)
+import contextlib
+
 from .const import (
     CONNECTION_CLOSED,
     CONNECTION_CONNECTED,
@@ -37,14 +26,27 @@ from .const import (
     CONNECTION_DISCONNECTED,
     CONNECTION_RECONNECTING,
     CONNECTION_STOPPING,
+    DEFAULT_BAUD_RATE,
     DEFAULT_SHUTDOWN_TIMEOUT,
+    PROTOCOL_NETWORK,
     RAIN_COLLECTOR_IMPERIAL,
     RAIN_COLLECTOR_METRIC,
     RAIN_COLLECTOR_METRIC_0_1,
-    PROTOCOL_NETWORK,
-    DEFAULT_BAUD_RATE,
 )
 from .protocol import DavisProtocolClient, validate_loop_frame
+from .utils import (
+    calc_dew_point,
+    calc_feels_like,
+    calc_heat_index,
+    calc_wind_chill,
+    convert_kmh_to_bft,
+    convert_to_iso_datetime,
+    convert_to_kmh,
+    get_baro_trend,
+    get_solar_rad,
+    get_uv,
+    get_wind_rose,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -218,7 +220,7 @@ class DavisVantageClient:
     _elevation: int = 0
     _firmware_version: str | None = None
     _last_readout_duration: float = 0
-    
+
     def __init__(
         self,
         hass,
@@ -268,10 +270,8 @@ class DavisVantageClient:
         """Execute one operation on the dedicated worker."""
         if self._needs_reconnect:
             self._connection_state = CONNECTION_RECONNECTING
-            try:
+            with contextlib.suppress(OSError, TimeoutError):
                 self._close_transport_sync()
-            except (OSError, TimeoutError):
-                pass
             self._vantagepro2 = None
             self._needs_reconnect = False
             self._reconnect_count += 1
@@ -283,10 +283,8 @@ class DavisVantageClient:
             self._last_failure_time = datetime.now().isoformat()
             self._failure_streak += 1
             self._needs_reconnect = True
-            try:
+            with contextlib.suppress(OSError, TimeoutError):
                 self._close_transport_sync()
-            except (OSError, TimeoutError):
-                pass
             self._vantagepro2 = None
             raise
         self._connection_state = CONNECTION_CONNECTED
@@ -334,7 +332,7 @@ class DavisVantageClient:
     @property
     def firmware_version(self) -> str | None:
         return self._firmware_version
-        
+
     @property
     def link(self):
         """Bridge to the underlying PyVantagePro link object."""
@@ -406,14 +404,14 @@ class DavisVantageClient:
 
         try:
             self._vantagepro2.link.open()
-            
+
             if self._use_loop2:
                 _LOGGER.debug("Start get_current_data (LOOP 2 requested)")
                 data = self._get_loop2_data()
             else:
                 _LOGGER.debug("Start get_current_data (LOOP 1)")
                 data = self._vantagepro2.get_current_data()
-                
+
             _LOGGER.debug("End get_current_data:")
         except Exception as e:
             if self._should_close_after_transaction():
@@ -426,7 +424,7 @@ class DavisVantageClient:
             _LOGGER.debug("End get_hilows")
         except Exception as e:
             _LOGGER.error("Couldn't get hilows: %s", e)
-            
+
         # LOOP2 already carries 10-min gust and average; the archive fetch is LOOP1-only.
         if not self._use_loop2:
             try:
@@ -456,7 +454,7 @@ class DavisVantageClient:
 
         return data, archives, hilows
 
-    def _get_loop2_data(self) -> "LoopData2Parser":
+    def _get_loop2_data(self) -> LoopData2Parser:
         """Request and parse a single LOOP2 packet.
 
         PyVantagePro has no LOOP2 support, so this sends "LPS 2 1" directly
@@ -485,7 +483,7 @@ class DavisVantageClient:
                 self.remove_all_incorrect_data(new_raw_data, new_data)
                 self.add_additional_info(new_data)
                 self.convert_values(new_data)
-                
+
                 if archives:
                     self.add_archive_info(archives, new_data)
                 elif self._use_loop2:
@@ -495,7 +493,7 @@ class DavisVantageClient:
                     self._last_raw_hilows = new_raw_hilows
                     self.remove_all_incorrect_hilows(new_raw_hilows, hilows)
                     self.add_hilows_info(hilows, new_data)
-                    
+
                 data = new_data
                 data["Datetime"] = self.get_iso_now()
                 data["LastError"] = ""
@@ -540,7 +538,7 @@ class DavisVantageClient:
         return raw_data
 
     def __get_full_raw_data_hilows(self, data):
-        raw_data = DataParser(data.raw_bytes, HighLowParserRevB.HILOWS_FORMAT)  
+        raw_data = DataParser(data.raw_bytes, HighLowParserRevB.HILOWS_FORMAT)
         return raw_data
 
     async def _async_send_console_command(
@@ -655,13 +653,13 @@ class DavisVantageClient:
                         data["FeelsLike"] = calc_feels_like(
                             data["TempOut"], data["HumOut"], data["WindSpeed"]
                         )
-                    
+
         wind_dir = data.get("WindDir")
         wind_speed = data.get("WindSpeed", 0)
 
         wind_map = {
-            "N": 0, "NNE": 23, "NE": 45, "ENE": 68, "E": 90, "ESE": 113, 
-            "SE": 135, "SSE": 158, "S": 180, "SSW": 203, "SW": 225, 
+            "N": 0, "NNE": 23, "NE": 45, "ENE": 68, "E": 90, "ESE": 113,
+            "SE": 135, "SSE": 158, "S": 180, "SSW": 203, "SW": 225,
             "WSW": 248, "W": 270, "WNW": 293, "NW": 315, "NNW": 338
         }
 
@@ -692,7 +690,7 @@ class DavisVantageClient:
 
         if data.get("RainRate") is not None:
             data["IsRaining"] = data["RainRate"] > 0
-            
+
         data["ArchiveInterval"] = self._vantagepro2.archive_period
         data["Latitude"] = self.latitude
         data["Longitude"] = self.longitude
@@ -727,30 +725,23 @@ class DavisVantageClient:
         loop_format = (
             LoopData2Parser.LOOP2_FORMAT if self._use_loop2 else LoopDataParserRevB.LOOP_FORMAT
         )
-        data_info = {key: value for key, value in loop_format}
+        data_info = dict(loop_format)
         self.remove_incorrect_data(raw_data, data_info, data)
 
     def remove_all_incorrect_hilows(self, raw_data, data):
-        data_info = {key: value for key, value in HighLowParserRevB.HILOWS_FORMAT}
+        data_info = dict(HighLowParserRevB.HILOWS_FORMAT)
         self.remove_incorrect_data(raw_data, data_info, data)
 
     def remove_incorrect_data(self, raw_data, data_info: dict[str, str], data: dict[str, Any]):
-        for key in data.keys(): 
-            info_key = re.sub(r"\d+$", "", key) 
+        for key in data:
+            info_key = re.sub(r"\d+$", "", key)
             data_type = data_info.get(info_key, "")
-            raw_value = raw_data.get(info_key, 0) 
-            if self.is_incorrect_value(raw_value, data_type): 
-                data[key] = None 
+            raw_value = raw_data.get(info_key, 0)
+            if self.is_incorrect_value(raw_value, data_type):
+                data[key] = None
 
     def is_incorrect_value(self, raw_value: int, data_type: str) -> bool:
-        if (
-            ((data_type in ["B", "7s"]) and (raw_value == 255))
-            or ((data_type == "H") and (raw_value in [32767, 65535]))
-            or ((data_type == "h") and (raw_value in [32767, -32768]))
-        ):
-            return True
-        else:
-            return False
+        return bool((data_type in ["B", "7s"] and raw_value == 255) or (data_type == "H" and raw_value in [32767, 65535]) or (data_type == "h" and raw_value in [32767, -32768]))
 
     def add_archive_info(self, archives, data: dict[str, Any]):
         if not archives:
@@ -758,10 +749,9 @@ class DavisVantageClient:
         latest_archive = archives[-1]
         data["WindGust"] = latest_archive["WindHi"]
         data["WindSpeedAvg"] = latest_archive["WindAvg"]
-        if data["WindSpeedAvg"] > 0:
-            if latest_archive["WindAvgDir"] < 255:
-                data["WindAvgDir"] = latest_archive["WindAvgDir"] * 22.5
-                data["WindAvgDirRose"] = get_wind_rose(data["WindAvgDir"])
+        if data["WindSpeedAvg"] > 0 and latest_archive["WindAvgDir"] < 255:
+            data["WindAvgDir"] = latest_archive["WindAvgDir"] * 22.5
+            data["WindAvgDirRose"] = get_wind_rose(data["WindAvgDir"])
         if data["WindSpeedAvg"] is not None:
             data["WindSpeedBft"] = convert_kmh_to_bft(
                 convert_to_kmh(data["WindSpeedAvg"])
@@ -788,31 +778,31 @@ class DavisVantageClient:
         if not hilows:
             return
         data["TempOutHiDay"] = hilows["TempHiDay"]
-        data["TempOutHiTime"] = self.strtotime(hilows["TempHiTime"]) 
+        data["TempOutHiTime"] = self.strtotime(hilows["TempHiTime"])
         data["TempOutLowDay"] = hilows["TempLoDay"]
-        data["TempOutLowTime"] = self.strtotime(hilows["TempLoTime"]) 
+        data["TempOutLowTime"] = self.strtotime(hilows["TempLoTime"])
 
         data["DewPointHiDay"] = hilows["DewHiDay"]
-        data["DewPointHiTime"] = self.strtotime(hilows["DewHiTime"]) 
+        data["DewPointHiTime"] = self.strtotime(hilows["DewHiTime"])
         data["DewPointLowDay"] = hilows["DewLoDay"]
-        data["DewPointLowTime"] = self.strtotime(hilows["DewLoTime"]) 
+        data["DewPointLowTime"] = self.strtotime(hilows["DewLoTime"])
 
         data["RainRateDay"] = hilows["RainHiDay"]
-        data["RainRateTime"] = self.strtotime(hilows["RainHiTime"]) 
+        data["RainRateTime"] = self.strtotime(hilows["RainHiTime"])
 
         data["BarometerHiDay"] = hilows["BaroHiDay"]
-        data["BarometerHiTime"] = self.strtotime(hilows["BaroHiTime"]) 
+        data["BarometerHiTime"] = self.strtotime(hilows["BaroHiTime"])
         data["BarometerLowDay"] = hilows["BaroLoDay"]
-        data["BarometerLoTime"] = self.strtotime(hilows["BaroLoTime"]) 
+        data["BarometerLoTime"] = self.strtotime(hilows["BaroLoTime"])
 
         data["SolarRadDay"] = hilows["SolarHiDay"]
-        data["SolarRadTime"] = self.strtotime(hilows["SolarHiTime"]) 
+        data["SolarRadTime"] = self.strtotime(hilows["SolarHiTime"])
 
         data["UVDay"] = hilows["UVHiDay"]
-        data["UVTime"] = self.strtotime(hilows["UVHiTime"]) 
+        data["UVTime"] = self.strtotime(hilows["UVHiTime"])
 
         data["WindGustDay"] = hilows["WindHiDay"]
-        data["WindGustTime"] = self.strtotime(hilows["WindHiTime"]) 
+        data["WindGustTime"] = self.strtotime(hilows["WindHiTime"])
 
     def get_link(self) -> str:
         if self._protocol == PROTOCOL_NETWORK:

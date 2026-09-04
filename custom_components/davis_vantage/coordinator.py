@@ -1,14 +1,14 @@
+import asyncio
+import inspect
+import logging
 from datetime import timedelta
 from typing import Any
-import logging
-import inspect
-import asyncio
 
 from homeassistant import config_entries
-from homeassistant.helpers.update_coordinator import UpdateFailed, DataUpdateCoordinator
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers import issue_registry as ir
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .client import DavisVantageClient
 from .const import DOMAIN
@@ -24,10 +24,10 @@ class DavisVantageDataUpdateCoordinator(DataUpdateCoordinator):
     """Class to manage fetching data from the weather station."""
 
     def __init__(
-        self, 
-        hass: HomeAssistant, 
-        client: DavisVantageClient, 
-        device_info: DeviceInfo, 
+        self,
+        hass: HomeAssistant,
+        client: DavisVantageClient,
+        device_info: DeviceInfo,
         config_entry: config_entries.ConfigEntry
     ) -> None:
         """Initialize."""
@@ -41,7 +41,7 @@ class DavisVantageDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=interval),
             config_entry=config_entry,
         )
-        
+
         self.client: DavisVantageClient = client
         self.platforms: list[str] = []
         self.last_updated = None
