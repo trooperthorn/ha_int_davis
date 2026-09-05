@@ -90,17 +90,15 @@ class TestGetRawData:
 
 class TestSetArchivePeriod:
     async def test_clears_cache_even_when_never_previously_cached(self):
-        # Regression test: clear_cached_property used to do
-        # `del self._vantagepro2.__dict__[property_name]`, which raised
-        # KeyError if archive_period had never been accessed yet (e.g. right
-        # after setup, before any successful poll primed the cache) - the
-        # service call would crash instead of just... setting the period.
+        # clear_cached_property must pop, not del: archive_period may never
+        # have been accessed yet (e.g. right after setup, before any
+        # successful poll primed the cache).
         client = DavisVantageClient(
             hass=None, protocol=PROTOCOL_SERIAL, link="/dev/ttyUSB0", persistent_connection=False
         )
         # A fresh MagicMock's __dict__ has no "archive_period" key until
         # something explicitly sets it - i.e. exactly the "never cached" case.
-        client._vantagepro2 = MagicMock()
+        client._protocol_client = MagicMock()
         client.set_archive_period = MagicMock()
         services = make_services(client)
 
@@ -112,7 +110,7 @@ class TestSetArchivePeriod:
         client = DavisVantageClient(
             hass=None, protocol=PROTOCOL_SERIAL, link="/dev/ttyUSB0", persistent_connection=False
         )
-        assert client._vantagepro2 is None
+        assert client._protocol_client is None
         client.set_archive_period = MagicMock()
         services = make_services(client)
 
@@ -181,6 +179,73 @@ class TestConsoleServices:
         await services.clear_alarms(make_call())
 
         client.async_clear_alarms.assert_called_once()
+
+
+class TestFullParityCommandServices:
+    """New full-parity commands: TEST, WRD, RXTEST, RECEIVERS, CALED, CALFIX, PUTET."""
+
+    async def test_run_test_returns_ok_flag(self):
+        client = MagicMock()
+        client.async_get_test = AsyncMock(return_value=True)
+        services = make_services(client)
+
+        result = await services.run_test(make_call())
+
+        assert result == {"ok": True}
+
+    async def test_get_station_type_returns_byte(self):
+        client = MagicMock()
+        client.async_get_station_type = AsyncMock(return_value=17)
+        services = make_services(client)
+
+        result = await services.get_station_type(make_call())
+
+        assert result == {"station_type": 17}
+
+    async def test_rxtest_calls_client(self):
+        client = MagicMock()
+        client.async_rxtest = AsyncMock()
+        services = make_services(client)
+
+        await services.rxtest(make_call())
+
+        client.async_rxtest.assert_called_once()
+
+    async def test_get_receivers_returns_bitmap(self):
+        client = MagicMock()
+        client.async_get_receivers = AsyncMock(return_value=0b101)
+        services = make_services(client)
+
+        result = await services.get_receivers(make_call())
+
+        assert result == {"receivers": 0b101}
+
+    async def test_get_calibrated_values_returns_hex_data(self):
+        client = MagicMock()
+        client.async_get_calibrated_values = AsyncMock(return_value="deadbeef")
+        services = make_services(client)
+
+        result = await services.get_calibrated_values(make_call())
+
+        assert result == {"data": "deadbeef"}
+
+    async def test_set_calibrated_values_passes_hex_data(self):
+        client = MagicMock()
+        client.async_set_calibrated_values = AsyncMock()
+        services = make_services(client)
+
+        await services.set_calibrated_values(make_call(data="00" * 43))
+
+        client.async_set_calibrated_values.assert_called_once_with("00" * 43)
+
+    async def test_set_yearly_et_passes_hundredths(self):
+        client = MagicMock()
+        client.async_set_yearly_et = AsyncMock()
+        services = make_services(client)
+
+        await services.set_yearly_et(make_call(et_hundredths=2483))
+
+        client.async_set_yearly_et.assert_called_once_with(2483)
 
 
 class TestMultipleEntryRouting:

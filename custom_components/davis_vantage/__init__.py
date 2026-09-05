@@ -38,8 +38,6 @@ from .verification import default_verification_result
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.WEATHER]
 
-logging.getLogger("pyvpdriver").setLevel(logging.WARNING)
-
 _LOGGER = logging.getLogger(__name__)
 
 

@@ -6,7 +6,6 @@ from zoneinfo import ZoneInfo
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from pyvantagepro.utils import bytes_to_hex
 
 from .const import (
     DOMAIN,
@@ -14,20 +13,32 @@ from .const import (
     RAIN_COLLECTOR_METRIC,
     RAIN_COLLECTOR_METRIC_0_1,
     SERVICE_CLEAR_ALARMS,
+    SERVICE_GET_CALIBRATED_VALUES,
     SERVICE_GET_DAVIS_TIME,
     SERVICE_GET_EEPROM,
     SERVICE_GET_INFO,
     SERVICE_GET_RAW_DATA,
+    SERVICE_GET_RECEIVERS,
+    SERVICE_GET_STATION_TYPE,
+    SERVICE_RUN_TEST,
+    SERVICE_RXTEST,
     SERVICE_SET_ARCHIVE_PERIOD,
     SERVICE_SET_BAROMETER_CALIBRATION,
+    SERVICE_SET_CALIBRATED_VALUES,
     SERVICE_SET_CONSOLE_LAMPS,
     SERVICE_SET_DAVIS_TIME,
     SERVICE_SET_EEPROM,
     SERVICE_SET_RAIN_COLLECTOR,
+    SERVICE_SET_YEARLY_ET,
     SERVICE_SET_YEARLY_RAIN,
 )
 from .coordinator import DataUpdateCoordinator
 from .utils import convert_to_iso_datetime
+
+
+def _bytes_to_hex(data: bytes) -> str:
+    """Format bytes as space-separated uppercase hex (e.g. b"\\x01\\x02" -> "01 02")."""
+    return " ".join(f"{byte:02X}" for byte in data)
 
 SET_YEARLY_RAIN_SERVICE_SCHEMA = vol.Schema(
     {
@@ -91,6 +102,20 @@ SET_EEPROM_SERVICE_SCHEMA = vol.Schema(
         vol.Optional("entry_id"): str,
         vol.Required("address"): HEX_ADDRESS,
         vol.Required("data"): HEX_BYTES,
+    }
+)
+
+SET_CALIBRATED_VALUES_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("entry_id"): str,
+        vol.Required("data"): vol.Match(r"^([0-9A-Fa-f]{2}){43}$"),
+    }
+)
+
+SET_YEARLY_ET_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("entry_id"): str,
+        vol.Required("et_hundredths"): int,
     }
 )
 
@@ -197,6 +222,54 @@ class DavisServicesSetup:
             self.clear_alarms,
         )
 
+        self.hass.services.async_register(
+            DOMAIN,
+            SERVICE_RUN_TEST,
+            self.run_test,
+            supports_response=SupportsResponse.ONLY,
+        )
+
+        self.hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_STATION_TYPE,
+            self.get_station_type,
+            supports_response=SupportsResponse.ONLY,
+        )
+
+        self.hass.services.async_register(
+            DOMAIN,
+            SERVICE_RXTEST,
+            self.rxtest,
+        )
+
+        self.hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_RECEIVERS,
+            self.get_receivers,
+            supports_response=SupportsResponse.ONLY,
+        )
+
+        self.hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_CALIBRATED_VALUES,
+            self.get_calibrated_values,
+            supports_response=SupportsResponse.ONLY,
+        )
+
+        self.hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_CALIBRATED_VALUES,
+            self.set_calibrated_values,
+            schema=SET_CALIBRATED_VALUES_SERVICE_SCHEMA,
+        )
+
+        self.hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_YEARLY_ET,
+            self.set_yearly_et,
+            schema=SET_YEARLY_ET_SERVICE_SCHEMA,
+        )
+
     def _entry_for_call(self, call: ServiceCall) -> ConfigEntry:
         """Resolve one entry instead of binding services to the last setup."""
         if self.config_entry is not None:
@@ -245,7 +318,7 @@ class DavisServicesSetup:
         for key in raw_data:
             value = raw_data[key]
             if isinstance(value, bytes):
-                data[key] = bytes_to_hex(value)
+                data[key] = _bytes_to_hex(value)
             else:
                 data[key] = value
         return data
@@ -304,6 +377,41 @@ class DavisServicesSetup:
         """Clear Active Alarms service"""
         client = self._client_for_call(call)
         await client.async_clear_alarms()
+
+    async def run_test(self, call: ServiceCall) -> dict[str, Any]:
+        """Run Test service (TEST command connection sanity check)."""
+        client = self._client_for_call(call)
+        return {"ok": await client.async_get_test()}
+
+    async def get_station_type(self, call: ServiceCall) -> dict[str, Any]:
+        """Get Station Type service (WRD command)."""
+        client = self._client_for_call(call)
+        return {"station_type": await client.async_get_station_type()}
+
+    async def rxtest(self, call: ServiceCall) -> None:
+        """RX Test service: return console to main screen, clear CRC-error count."""
+        client = self._client_for_call(call)
+        await client.async_rxtest()
+
+    async def get_receivers(self, call: ServiceCall) -> dict[str, Any]:
+        """Get Receivers service (RECEIVERS bitmap)."""
+        client = self._client_for_call(call)
+        return {"receivers": await client.async_get_receivers()}
+
+    async def get_calibrated_values(self, call: ServiceCall) -> dict[str, Any]:
+        """Get Calibrated Values service (CALED)."""
+        client = self._client_for_call(call)
+        return {"data": await client.async_get_calibrated_values()}
+
+    async def set_calibrated_values(self, call: ServiceCall) -> None:
+        """Set Calibrated Values service (CALFIX)."""
+        client = self._client_for_call(call)
+        await client.async_set_calibrated_values(call.data["data"])
+
+    async def set_yearly_et(self, call: ServiceCall) -> None:
+        """Set Yearly ET service (PUTET)."""
+        client = self._client_for_call(call)
+        await client.async_set_yearly_et(call.data["et_hundredths"])
 
 
 def async_setup_services(hass: HomeAssistant) -> None:

@@ -7,9 +7,10 @@ Configuration knobs, troubleshooting, the test gate, and the release path.
 Runtime tuning (`interval`, `use_loop2`, `persistent_connection`) lives in
 `ConfigEntry.options`; `async_migrate_entry` moves those keys out of legacy `data` for
 version 2 entries. LOOP2 mode is used only when the option is on and the entry data
-records `loop2_supported` as true. On the network protocol the link is closed after every
-transaction regardless of the persistent-connection option, because WeatherLink IP must
-periodically release TCP port 22222 for cloud uploads.
+records `loop2_supported` as true. Serial/USB is the only supported transport going
+forward; the IP/network (WeatherLink raw-TCP) transport was removed (see
+`decisions.md`). An existing config entry with `protocol="Network"` fails verification
+with no automatic migration; remove and re-add the integration on serial.
 
 Each poll is limited to fifteen seconds. Three consecutive failed polls raise the
 `connection_lost` repair issue (non-fixable, non-persistent, WARNING severity, with the
@@ -55,9 +56,9 @@ tests scripts`, `mypy --python-version 3.14 custom_components/davis_vantage/`,
 `pytest tests/ -v`, then `python scripts/build_release_artifacts.py --validate-only`.
 Pins live in `requirements_test.txt`; the harness pin (0.13.363) itself pins core
 2026.9.0, and the CI job asserts the installed core and serialx versions. The harness
-imports `fcntl`, so on Windows the suite runs under WSL. `pyserial` stays in the manifest
-because the PyVantagePro fork still imports `serial` and serialx does not provide that
-module (see `decisions.md`).
+imports `fcntl`, so on Windows the suite runs under WSL. Neither `pyvantagepro` nor
+`pyserial` are dependencies any more (see `decisions.md`); the integration's serial
+protocol is implemented directly against `serialx` in `protocol.py`.
 
 ## Release path
 

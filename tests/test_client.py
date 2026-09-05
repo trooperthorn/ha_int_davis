@@ -11,7 +11,6 @@ import time
 from unittest.mock import MagicMock, call, patch
 
 import pytest
-from pyvantagepro.device import BadAckException
 
 from custom_components.davis_vantage.client import (
     DavisSerialXLink,
@@ -21,15 +20,15 @@ from custom_components.davis_vantage.client import (
 from custom_components.davis_vantage.const import (
     CONNECTION_CONNECTED,
     CONNECTION_DEGRADED,
-    PROTOCOL_NETWORK,
     PROTOCOL_SERIAL,
     RAIN_COLLECTOR_IMPERIAL,
     RAIN_COLLECTOR_METRIC,
     RAIN_COLLECTOR_METRIC_0_1,
 )
+from custom_components.davis_vantage.protocol import DavisBadAckError
 
 
-class _FakeVantagePro2:
+class _FakeProtocolClient:
     """Stands in for the real device connection in tests that only exercise
     data-transform logic and never touch serial I/O."""
 
@@ -48,7 +47,7 @@ def make_client(**kwargs) -> DavisVantageClient:
     }
     defaults.update(kwargs)
     client = DavisVantageClient(**defaults)
-    client._vantagepro2 = _FakeVantagePro2()
+    client._protocol_client = _FakeProtocolClient()
     return client
 
 
@@ -72,7 +71,7 @@ async def test_direct_console_command_enforces_documented_response() -> None:
     client = make_client()
     vantage = MagicMock()
     vantage.link.read.return_value = b"\n\rOK\n\r1.90\n\r"
-    client._vantagepro2 = vantage
+    client._protocol_client = vantage
 
     assert await client.async_get_nver() == "\n\rOK\n\r1.90\n\r"
     vantage.link.write.assert_called_once_with(b"NVER\n")
@@ -85,9 +84,9 @@ async def test_direct_console_command_rejects_nak_and_releases_link() -> None:
     client = make_client()
     vantage = MagicMock()
     vantage.link.read.return_value = b"!"
-    client._vantagepro2 = vantage
+    client._protocol_client = vantage
 
-    with pytest.raises(BadAckException):
+    with pytest.raises(DavisBadAckError):
         await client.async_set_console_lamps(True)
 
     vantage.link.close.assert_called()
@@ -95,10 +94,6 @@ async def test_direct_console_command_rejects_nak_and_releases_link() -> None:
 
 
 class TestGetLink:
-    def test_network_protocol_uses_tcp(self):
-        client = make_client(protocol=PROTOCOL_NETWORK, link="192.168.1.50:22222")
-        assert client.get_link() == "tcp:192.168.1.50:22222"
-
     def test_serial_protocol_uses_configured_baud(self):
         client = make_client(protocol=PROTOCOL_SERIAL, link="/dev/ttyUSB0", baud_rate=9600)
         assert client.get_link() == "serial:/dev/ttyUSB0:9600:8N1"
@@ -112,13 +107,13 @@ class TestGetLink:
         client = make_client(protocol=PROTOCOL_SERIAL, link="/dev/ttyUSB0", baud_rate=0)
         assert client.get_link() == "serial:/dev/ttyUSB0:19200:8N1"
 
-    def test_weatherlink_tcp_is_released_even_when_persistent_is_requested(self):
+    def test_persistent_connection_is_honored_for_serial(self):
         client = make_client(
-            protocol=PROTOCOL_NETWORK,
-            link="192.168.1.50:22222",
+            protocol=PROTOCOL_SERIAL,
+            link="/dev/ttyUSB0",
             persistent_connection=True,
         )
-        assert client._should_close_after_transaction() is True
+        assert client._should_close_after_transaction() is False
 
 
 def test_serialx_link_explicitly_opens_transport_before_buffer_access():
@@ -135,21 +130,125 @@ def test_serialx_link_explicitly_opens_transport_before_buffer_access():
     ]
 
 
+def test_read_accumulates_short_reads_until_size_is_reached():
+    """Confirmed against real hardware on COM3, 2026-09-04: serialx's Windows
+    backend subclasses io.RawIOBase, whose read(size) can return fewer bytes
+    than requested even with time left on the clock. A single call to
+    transport.read(size) is not enough for a 99-byte LOOP packet or a
+    438-byte HILOWS block; the link must poll and accumulate until it has
+    every requested byte or the timeout budget is spent.
+    """
+    transport = MagicMock()
+    transport.is_open = True
+    chunks = [b"AB", b"", b"CDE", b"", b"F"]
+
+    def fake_read(size):
+        return chunks.pop(0) if chunks else b""
+
+    transport.read.side_effect = fake_read
+    with patch("serialx.serial_for_url", return_value=transport):
+        link = DavisSerialXLink("/dev/ttyUSB0", 19200, timeout=5)
+        link.open()
+        result = link.read(6, timeout=5, binary=True)
+
+    assert result == b"ABCDEF"
+
+
+def test_read_sets_the_remaining_budget_as_the_per_call_timeout():
+    """Regression test for the 2026-09-04 HILOWS bug: the first version of
+    this loop set a fixed short poll timeout (0.05s) on every call. That
+    interval was long enough for a 99-byte LOOP packet to complete via many
+    polls, masking the bug, but too short for the Windows driver to
+    accumulate a continuous 438-byte HILOWS burst, truncating it even though
+    the console sent the full response (confirmed with a pyserial
+    differential test, see docs/decisions.md). The per-call timeout must
+    reflect the remaining overall budget, not a small fixed interval.
+    """
+    transport = MagicMock()
+    transport.is_open = True
+    observed_timeouts = []
+
+    def fake_read(size):
+        observed_timeouts.append(transport.timeout)
+        return b"X" * size
+
+    transport.read.side_effect = fake_read
+    with patch("serialx.serial_for_url", return_value=transport):
+        link = DavisSerialXLink("/dev/ttyUSB0", 19200, timeout=10)
+        link.open()
+        link.read(438, timeout=10, binary=True)
+
+    assert observed_timeouts, "read() was never called"
+    assert observed_timeouts[0] > 1.0, (
+        f"per-call timeout was {observed_timeouts[0]!r}, expected close to the "
+        "full 10s budget, not a short fixed poll interval"
+    )
+
+
+def test_read_gives_up_at_the_timeout_with_a_short_result():
+    """If the far end never sends the rest, the link must return whatever it
+    has rather than blocking forever."""
+    transport = MagicMock()
+    transport.is_open = True
+    transport.read.return_value = b""
+    with patch("serialx.serial_for_url", return_value=transport):
+        link = DavisSerialXLink("/dev/ttyUSB0", 19200, timeout=0.05)
+        link.open()
+        result = link.read(6, timeout=0.05, binary=True)
+
+    assert result == b""
+
+
+def test_set_yearly_et_compensates_for_the_consoles_putet_quirk():
+    """Confirmed against real hardware on 2026-09-04 (see docs/decisions.md): the
+    console subtracts the current day's not-yet-finalized ET from whatever PUTET
+    is given before storing it, so a naive `PUTET 3719` stored 37.05" instead of
+    37.19" when the day's ET was 0.142". set_yearly_et() must add the day's
+    current ET before sending so the caller's intent is what actually gets stored.
+    """
+    client = make_client()
+    client._protocol_client.get_current_data = MagicMock(return_value={"ETDay": 0.142})
+    client._protocol_client.set_yearly_et = MagicMock()
+
+    client.set_yearly_et(3719)
+
+    client._protocol_client.set_yearly_et.assert_called_once_with(3719 + 14)
+
+
 class TestCorrectRainValues:
+    """Single-layer rain-rate scaling (finding 1.2).
+
+    Parsers in protocol.py now store rain fields as raw click counts;
+    correct_rain_values() is the single point that converts a click count to
+    inches, using one direct inches-per-click factor for the configured
+    collector type (no more parser-assumes-imperial-then-client-rescales
+    double layer).
+    """
+
     @pytest.mark.parametrize(
-        "collector,factor",
+        "collector,inches_per_click",
         [
-            (RAIN_COLLECTOR_IMPERIAL, 1.0),
-            (RAIN_COLLECTOR_METRIC, 2 / 2.54),
-            (RAIN_COLLECTOR_METRIC_0_1, 1 / 2.54),
+            (RAIN_COLLECTOR_IMPERIAL, 0.01),
+            (RAIN_COLLECTOR_METRIC, 0.2 / 25.4),
+            (RAIN_COLLECTOR_METRIC_0_1, 0.1 / 25.4),
         ],
     )
-    def test_applies_collector_factor(self, collector, factor):
+    def test_applies_collector_factor_to_raw_click_counts(self, collector, inches_per_click):
         client = make_client()
-        data = {"RainCollector": collector, "RainDay": 1.0, "RainRate": 2.0}
+        data = {
+            "RainCollector": collector,
+            "RainDay": 100,
+            "RainRate": 5,
+            "RainLast15Min": 2,
+            "RainLastHour": 3,
+            "RainLast24Hr": 4,
+        }
         client.correct_rain_values(data)
-        assert data["RainDay"] == pytest.approx(factor)
-        assert data["RainRate"] == pytest.approx(2.0 * factor)
+        assert data["RainDay"] == pytest.approx(100 * inches_per_click)
+        assert data["RainRate"] == pytest.approx(5 * inches_per_click)
+        assert data["RainLast15Min"] == pytest.approx(2 * inches_per_click)
+        assert data["RainLastHour"] == pytest.approx(3 * inches_per_click)
+        assert data["RainLast24Hr"] == pytest.approx(4 * inches_per_click)
 
     def test_missing_keys_are_skipped_not_errored(self):
         client = make_client()
@@ -159,9 +258,9 @@ class TestCorrectRainValues:
 
     def test_unknown_collector_defaults_to_imperial_factor(self):
         client = make_client()
-        data = {"RainCollector": "", "RainDay": 5.0}
+        data = {"RainCollector": "", "RainDay": 500}
         client.correct_rain_values(data)
-        assert data["RainDay"] == 5.0
+        assert data["RainDay"] == pytest.approx(5.0)
 
 
 class TestIsIncorrectValue:
@@ -333,30 +432,36 @@ class TestLoopData2Parser:
     def test_storm_start_date_field_is_named_like_loop1(self):
         # correct_rain_values() looks for "RainStorm" (LOOP1's name), not
         # "StormRain" - keep LOOP2 consistent so unit correction still runs.
+        # Raw click count; client.py.correct_rain_values() does the scaling.
         raw = pack_loop2(RainStorm=150)
         parsed = LoopData2Parser(raw)
-        assert parsed["RainStorm"] == pytest.approx(1.5)
+        assert parsed["RainStorm"] == 150
 
-    def test_rain_and_et_scaling(self):
+    def test_rain_fields_stay_raw_click_counts_et_stays_scaled(self):
+        # Single-layer rain scaling (finding 1.2): the parser no longer
+        # divides rain click counts by 100 (that assumed a 0.01" collector);
+        # client.py.correct_rain_values() is now the only place that scales
+        # them, using the actual configured collector's inches-per-click.
+        # ET is not click-based and is still scaled here, per the manual.
         raw = pack_loop2(RainRate=256, RainDay=500, RainLast15Min=10, ETDay=25)
         parsed = LoopData2Parser(raw)
-        assert parsed["RainRate"] == pytest.approx(2.56)
-        assert parsed["RainDay"] == pytest.approx(5.0)
-        assert parsed["RainLast15Min"] == pytest.approx(0.1)
+        assert parsed["RainRate"] == 256
+        assert parsed["RainDay"] == 500
+        assert parsed["RainLast15Min"] == 10
         assert parsed["ETDay"] == pytest.approx(0.025)
 
 
 class TestAsyncClose:
     async def test_noop_when_never_connected(self):
         client = make_client()
-        client._vantagepro2 = None
+        client._protocol_client = None
         # Must not attempt to open a connection just to close it.
         await client.async_close()
 
     async def test_closes_link_when_connected(self):
         client = make_client()
-        client._vantagepro2.link = MagicMock()
-        link = client._vantagepro2.link
+        client._protocol_client.link = MagicMock()
+        link = client._protocol_client.link
 
         assert await client.async_close() is True
 
@@ -364,8 +469,8 @@ class TestAsyncClose:
 
     async def test_close_error_is_caught_not_raised(self):
         client = make_client()
-        client._vantagepro2.link = MagicMock()
-        client._vantagepro2.link.close.side_effect = OSError("port already gone")
+        client._protocol_client.link = MagicMock()
+        client._protocol_client.link.close.side_effect = OSError("port already gone")
 
         # A failed close is a controlled shutdown result and still stops the worker.
         assert await client.async_close() is False
@@ -452,7 +557,7 @@ class TestTransportOwnershipDuringCancellation:
 
     async def test_failure_reconnects_before_the_next_transaction(self):
         client = make_client()
-        client._vantagepro2.link = MagicMock()
+        client._protocol_client.link = MagicMock()
 
         def fail():
             raise OSError("USB logger removed")

@@ -12,3 +12,5 @@ carries only what a reader needs at the point of reading; explanation lives here
 - `operations.md`: runtime options and troubleshooting, blueprint options, the test gate,
   the release path and its GitHub App, branch protection, and line endings.
 - `decisions.md`: dated decisions with the alternative rejected and why.
+- `backlog.md`: residual gaps left after a change deliberately scoped down, with the
+  reasoning for the scoping choice.

@@ -563,6 +563,42 @@
             "extra_humidity_7": {
                 "name": "Extra Humidity 7"
             },
+            "extra_temperature_hi": {
+                "name": "Extra Temperature (Day High)"
+            },
+            "extra_temperature_low": {
+                "name": "Extra Temperature (Day Low)"
+            },
+            "extra_humidity_hi": {
+                "name": "Extra Humidity (Day High)"
+            },
+            "extra_humidity_low": {
+                "name": "Extra Humidity (Day Low)"
+            },
+            "soil_temperature_hi": {
+                "name": "Soil Temperature (Day High)"
+            },
+            "soil_temperature_low": {
+                "name": "Soil Temperature (Day Low)"
+            },
+            "leaf_temperature_hi": {
+                "name": "Leaf Temperature (Day High)"
+            },
+            "leaf_temperature_low": {
+                "name": "Leaf Temperature (Day Low)"
+            },
+            "soil_moisture_hi": {
+                "name": "Soil Moisture (Day High)"
+            },
+            "soil_moisture_low": {
+                "name": "Soil Moisture (Day Low)"
+            },
+            "leaf_wetness_hi": {
+                "name": "Leaf Wetness (Day High)"
+            },
+            "leaf_wetness_low": {
+                "name": "Leaf Wetness (Day Low)"
+            },
             "latitude": {
                 "name": "Latitude"
             },
@@ -705,6 +741,46 @@
         "clear_alarms": {
             "name": "Clear Active Alarms",
             "description": "Silences sounding alarms and resets active hardware alarm bits on the console."
+        },
+        "run_test": {
+            "name": "Run Connection Test",
+            "description": "Sends the TEST command and confirms the console echoes it back. A basic connection sanity check."
+        },
+        "get_station_type": {
+            "name": "Get Station Type",
+            "description": "Reads the WRD station-type byte (16 = Vantage Pro/Pro2, 17 = Vantage Vue)."
+        },
+        "rxtest": {
+            "name": "Reset Receiver Test Screen",
+            "description": "Moves the console off its \"Receiving From...\" screen and clears the RXCHECK CRC-error count."
+        },
+        "get_receivers": {
+            "name": "Get Receivers",
+            "description": "Reads the RECEIVERS bitmap of transmitter station IDs the console can currently hear."
+        },
+        "get_calibrated_values": {
+            "name": "Get Calibrated Values",
+            "description": "Reads the CALED block of current calibrated sensor values."
+        },
+        "set_calibrated_values": {
+            "name": "Set Calibrated Values",
+            "description": "Advanced/expert use only. Pushes a 43-byte CALFIX block of uncalibrated raw sensor values, matching the CALED layout.",
+            "fields": {
+                "data": {
+                    "name": "Data",
+                    "description": "43 bytes as a hex string (86 hex characters)."
+                }
+            }
+        },
+        "set_yearly_et": {
+            "name": "Set Yearly ET",
+            "description": "Sets yearly evapotranspiration on the console (PUTET).",
+            "fields": {
+                "et_hundredths": {
+                    "name": "ET (100ths of an inch)",
+                    "description": "Yearly ET in 100ths of an inch, e.g. 2483 for 24.83in."
+                }
+            }
         }
     }
 }

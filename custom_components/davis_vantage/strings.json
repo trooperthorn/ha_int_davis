@@ -180,6 +180,46 @@
           "description": "Bytes to write, as a hex string (e.g. \"13\" for one byte, \"0102\" for two)."
         }
       }
+    },
+    "run_test": {
+      "name": "Run Connection Test",
+      "description": "Sends the TEST command and confirms the console echoes it back. A basic connection sanity check."
+    },
+    "get_station_type": {
+      "name": "Get Station Type",
+      "description": "Reads the WRD station-type byte (16 = Vantage Pro/Pro2, 17 = Vantage Vue)."
+    },
+    "rxtest": {
+      "name": "Reset Receiver Test Screen",
+      "description": "Moves the console off its \"Receiving From...\" screen and clears the RXCHECK CRC-error count."
+    },
+    "get_receivers": {
+      "name": "Get Receivers",
+      "description": "Reads the RECEIVERS bitmap of transmitter station IDs the console can currently hear."
+    },
+    "get_calibrated_values": {
+      "name": "Get Calibrated Values",
+      "description": "Reads the CALED block of current calibrated sensor values."
+    },
+    "set_calibrated_values": {
+      "name": "Set Calibrated Values",
+      "description": "Advanced/expert use only. Pushes a 43-byte CALFIX block of uncalibrated raw sensor values, matching the CALED layout.",
+      "fields": {
+        "data": {
+          "name": "Data",
+          "description": "43 bytes as a hex string (86 hex characters)."
+        }
+      }
+    },
+    "set_yearly_et": {
+      "name": "Set Yearly ET",
+      "description": "Sets yearly evapotranspiration on the console (PUTET).",
+      "fields": {
+        "et_hundredths": {
+          "name": "ET (100ths of an inch)",
+          "description": "Yearly ET in 100ths of an inch, e.g. 2483 for 24.83in."
+        }
+      }
     }
   }
 }

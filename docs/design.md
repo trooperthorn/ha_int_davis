@@ -26,25 +26,35 @@ reject every future poll for an entry Home Assistant still considers active. The
 undo happens when the close does not confirm. A successful unload deletes the
 `connection_lost` repair issue so removing the integration never leaves a stale issue.
 
-The `pyvpdriver` logger is set to WARNING at import time to quiet the serial library.
-Whether that logger name still matches anything is unverified (see below).
-
 ## Client and transport
 
 One config entry owns one single-worker `ThreadPoolExecutor`. Cancelling a Home
 Assistant waiter never cancels or releases the blocking Davis operation, and
 `_async_run_io` shields the future for the same reason. `serialx.serial_for_url` returns
 a configured but closed transport, so the link opens it explicitly; `verification.py`
-does the same.
+does the same. Serial/USB is the only supported transport (see `decisions.md`).
 
-PyVantagePro implements only the LOOP1 packet, so `LoopData2Parser` mirrors
-`LoopDataParserRevB` (byte layout plus unit scaling) for LOOP2. It subclasses the LOOP1
-parser purely to reuse the storm-date and time helpers, skips the LOOP1 `__init__`, and
-calls `DataParser.__init__` with the LOOP2 format. LOOP2 carries no alarm bits, battery
-status, forecast icon, or sunrise and sunset, so those keys are filled with None to keep
-downstream lookups from raising. The parser format is selected by mode: parsing LOOP2
-bytes with the LOOP1 layout would silently misread them and corrupt the invalid-value
-masking that follows. The raw bytes are attached as `_raw_bytes` for diagnostics.
+`protocol.py` is self-contained: it implements the wake-up/send/ACK handshake, CRC-16,
+every parser, and every documented command directly against the Davis manual, with no
+third-party base class. `DavisProtocolClient` (`protocol.py`) is the wire-protocol layer;
+`DavisVantageClient` (`client.py`) is the facade `coordinator.py`/`__init__.py`/
+`services.py`/`diagnostics.py` actually call, and it owns the transport lifecycle
+(reconnect, persistent-connection option, executor shutdown) on top of it. The client
+keeps its `_protocol_client` attribute name generic rather than naming a specific vendor
+library, since it now owns that logic directly rather than wrapping a third party's class.
+
+`LoopData2Parser` (`protocol.py`) is its own class built from `LOOP2_FORMAT`, a tuple of
+`(name, struct_code)` pairs read directly off the manual's LOOP2 offset table, not
+derived from or subclassing the LOOP1 parser. A module-level self-check
+(`_assert_loop2_offsets`) asserts the byte offset of several documented milestone fields
+every time the module is imported, so a future edit that miscounts an "Unused" field's
+size fails immediately at import time instead of silently shifting every field after it
+(see `protocol.md` and `decisions.md` for the LOOP2 bug this specifically guards against).
+LOOP2 carries no alarm bits, battery status, forecast icon, or sunrise and sunset, so
+those keys are filled with None to keep downstream lookups from raising. The parser
+format is selected by mode in `client.py`: parsing LOOP2 bytes with the LOOP1 layout
+would silently misread them and corrupt the invalid-value masking that follows. The raw
+bytes are attached as `_raw_bytes` for diagnostics.
 
 In LOOP2 mode the archive fetch is skipped: the packet already carries a rolling
 ten-minute gust and average, so the DMPAFT round trip that LOOP1 needs to derive them
@@ -57,18 +67,15 @@ None, because LOOP2 already supplies console-computed values and LOOP1 supplies 
 `FeelsLike` prefers the console's THSW figure over the generic estimate when LOOP2
 provides it. Wind direction accepts a compass string or a numeric bearing, normalizes the
 rose to lowercase, and reports 0 and "n" for calm air with no direction. Battery status
-and alarm bits come from PyVantagePro's LOOP1 parser rather than being re-derived from
-byte offsets; in LOOP2 mode they are None and the consumers already handle that. LOOP2 has
-no ten-minute average direction, only the gust direction, so that is exposed as
-`WindGustDir` rather than mislabeled as an average.
+and alarm bits come from `protocol.py`'s own LOOP1 parser, which calls
+`apply_loop1_alarm_bits` directly against the validated raw frame (no intermediate
+"alarm-safe" copy is needed now that the decoder is owned by this repository and already
+uses the correct LSB-first bit order); in LOOP2 mode those keys are None and the
+consumers already handle that. LOOP2 has no ten-minute average direction, only the gust
+direction, so that is exposed as `WindGustDir` rather than mislabeled as an average.
 
-`_alarm_safe_loop1_frame` exists because PyVantagePro's alarm decoder iterates integers
-and raises `TypeError`, and its bit order is the reverse of the Davis definition. CRC and
-envelope validation already ran on the original frame, so only the alarm bytes are zeroed
-for the legacy parser while `apply_loop1_alarm_bits` decodes them from the original.
-
-`_read_exact` sleeps ten milliseconds on an empty read so a non-blocking transport does
-not spin the loop at full CPU for the whole deadline.
+`_read_exact` (`verification.py`) sleeps ten milliseconds on an empty read so a
+non-blocking transport does not spin the loop at full CPU for the whole deadline.
 
 ## Coordinator
 
@@ -95,7 +102,7 @@ replaced an earlier MAC-based one.
 uppercase. Sectors are 22.5 degrees shifted by 11.25 so north is centered on 0 and 360.
 
 `SENSOR_TYPES` maps directly onto the Davis serial protocol field names through
-PyVantagePro's dictionary keys. Notable entries:
+`protocol.py`'s parser dictionary keys. Notable entries:
 
 - `wind_speed_10_min_gust` is really the ten-minute average per the LOOP format; its
   name and translation say "average" but the key stays so entity ids and recorder history
@@ -124,9 +131,9 @@ unplugged sensor; for wind direction, a sentinel, 0, or "N" returns the previous
 value so calm air does not swing the graph, and a fresh boot returns None; a missing rain
 rate becomes 0 rather than unknown; every other sensor becomes None. The missing-value
 warning fires only on the transition into missing, ignores the expected-missing keys
-(solar, UV, wind direction and rose, rain rate), and dumps the PyVantagePro keys when the
-outdoor temperature itself is missing, so a sensor that legitimately stays None does not
-warn on every poll.
+(solar, UV, wind direction and rose, rain rate), and dumps the coordinator's data keys
+when the outdoor temperature itself is missing, so a sensor that legitimately stays None
+does not warn on every poll.
 
 ## Weather entity
 
@@ -149,8 +156,6 @@ is unreachable and the rest of the payload is still useful then.
 
 ## Unverified
 
-- The `pyvpdriver` logger name silenced at import time does not match the imported
-  package name `pyvantagepro`; whether it quiets anything is unverified.
 - `sensor.py` once claimed core "does not currently enforce a UV device class"; not
   re-checked against the current core release.
 - `sensor.py` cites Davis serial protocol v2.61 while the rest of the code cites manual

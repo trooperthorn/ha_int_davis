@@ -3,15 +3,11 @@ import asyncio
 import logging
 import re
 import struct
+import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
-
-from pyvantagepro import VantagePro2
-from pyvantagepro.device import BadAckException
-from pyvantagepro.link import link_from_url
-from pyvantagepro.parser import DataParser, HighLowParserRevB, LoopDataParserRevB
 
 if TYPE_CHECKING:
     from serialx import BaseSerial
@@ -28,12 +24,18 @@ from .const import (
     CONNECTION_STOPPING,
     DEFAULT_BAUD_RATE,
     DEFAULT_SHUTDOWN_TIMEOUT,
-    PROTOCOL_NETWORK,
     RAIN_COLLECTOR_IMPERIAL,
     RAIN_COLLECTOR_METRIC,
     RAIN_COLLECTOR_METRIC_0_1,
 )
-from .protocol import DavisProtocolClient, validate_loop_frame
+from .protocol import (
+    DataParser,
+    DavisBadAckError,
+    DavisProtocolClient,
+    HighLowParserRevB,
+    LoopData2Parser,
+    LoopDataParserRevB,
+)
 from .utils import (
     calc_dew_point,
     calc_feels_like,
@@ -52,7 +54,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class DavisSerialXLink:
-    """PyVantagePro-compatible link backed by serialx.serial_for_url()."""
+    """Minimal link contract backed by serialx.serial_for_url()."""
 
     def __init__(
         self,
@@ -110,13 +112,13 @@ class DavisSerialXLink:
     def read(
         self, size: int | None = None, timeout: float | None = None, binary: bool = False
     ) -> str | bytes:
-        """Read data using the legacy PyVantagePro link contract."""
+        """Read data using the link contract shared with DavisProtocolClient."""
         self.open()
         assert self._serial is not None
         previous_timeout = self._serial.timeout
-        self._serial.timeout = timeout or self.timeout
+        effective_timeout = timeout or self.timeout
         try:
-            data = self._serial.read(size or 4048)
+            data = self._read_exactly(size, effective_timeout) if size else self._serial.read(4048)
         finally:
             self._serial.timeout = (
                 previous_timeout if previous_timeout is not None else self.timeout
@@ -128,93 +130,40 @@ class DavisSerialXLink:
         except UnicodeDecodeError:
             return data
 
+    def _read_exactly(self, size: int, timeout: float) -> bytes:
+        """Accumulate reads until size bytes arrive or the timeout elapses.
 
-class LoopData2Parser(LoopDataParserRevB):
-    """Parse a LOOP2 packet, sent by the "LPS 2 1" command.
-
-    Subclasses LoopDataParserRevB only for its unpack helpers; its LOOP1
-    __init__ is intentionally not called.
-    """
-
-    LOOP2_FORMAT = (
-        ("LOO", "3s"),
-        ("BarTrend", "B"),
-        ("PacketType", "B"),
-        ("Unused0", "2s"),
-        ("Barometer", "H"),
-        ("TempIn", "h"),
-        ("HumIn", "B"),
-        ("TempOut", "h"),
-        ("WindSpeed", "B"),
-        ("Unused1", "1s"),
-        ("WindDir", "H"),
-        ("WindSpeed10Min", "H"),
-        ("WindSpeed2Min", "H"),
-        ("WindGust10Min", "H"),
-        ("WindGustDir10Min", "H"),
-        ("Unused2", "2s"),
-        ("Unused3", "2s"),
-        ("DewPoint", "h"),
-        ("Unused4", "1s"),
-        ("HumOut", "B"),
-        ("Unused5", "1s"),
-        ("HeatIndex", "h"),
-        ("WindChill", "h"),
-        ("THSWIndex", "h"),
-        ("RainRate", "H"),
-        ("UV", "B"),
-        ("SolarRad", "H"),
-        ("RainStorm", "H"),
-        ("StormStartDate", "H"),
-        ("RainDay", "H"),
-        ("RainLast15Min", "H"),
-        ("RainLastHour", "H"),
-        ("ETDay", "H"),
-        ("RainLast24Hr", "H"),
-        ("BarReductionMethod", "B"),
-        ("UserBarOffset", "h"),
-        ("BarCalNumber", "h"),
-        ("BarSensorRaw", "H"),
-        ("BarAbsolute", "H"),
-        ("AltimeterSetting", "H"),
-        ("Unused6", "2s"),
-        ("GraphPointers", "10s"),
-        ("Unused7", "12s"),
-        ("EOL", "2s"),
-        ("CRC", "H"),
-    )
-
-    def __init__(self, data: bytes) -> None:
-        # Skip LoopDataParserRevB.__init__ (LOOP1 layout); use the LOOP2 format directly.
-        DataParser.__init__(self, data, self.LOOP2_FORMAT, order="<")
-
-        self["Barometer"] = self["Barometer"] / 1000
-        self["TempIn"] = self["TempIn"] / 10
-        self["TempOut"] = self["TempOut"] / 10
-        self["WindSpeed10Min"] = self["WindSpeed10Min"] / 10
-        self["WindSpeed2Min"] = self["WindSpeed2Min"] / 10
-        self["WindGust10Min"] = self["WindGust10Min"] / 10
-        for key in ("DewPoint", "HeatIndex", "WindChill", "THSWIndex"):
-            self[key] = None if self[key] == 255 else self[key]
-        self["RainRate"] = self["RainRate"] / 100
-        self["UV"] = self["UV"] / 10
-        self["RainStorm"] = self["RainStorm"] / 100
-        self["StormStartDate"] = self.unpack_storm_date(self["StormStartDate"])
-        self["RainDay"] = self["RainDay"] / 100
-        self["RainLast15Min"] = self["RainLast15Min"] / 100
-        self["RainLastHour"] = self["RainLastHour"] / 100
-        self["ETDay"] = self["ETDay"] / 1000
-        self["RainLast24Hr"] = self["RainLast24Hr"] / 100
-
-        # LOOP1-only keys are filled with None so downstream lookups do not KeyError.
-        self["SunRise"] = None
-        self["SunSet"] = None
+        serialx's Windows backend subclasses io.RawIOBase, whose read(size)
+        returns whatever one underlying ReadFile call produced rather than
+        guaranteeing size bytes, so a single call can still return short.
+        Confirmed against real hardware (see docs/decisions.md): the per-call
+        timeout must be set to the full remaining budget, not a short fixed
+        poll interval. A short per-call timeout (e.g. 0.05s) reliably
+        truncated large reads like the 438-byte HILOWS response well before
+        the console finished sending, even though pyserial's own read(size)
+        on the same port captured the identical response whole on the first
+        call; the console was never the problem, an over-eager short timeout
+        was. Recomputing the timeout from the remaining budget on every loop
+        iteration keeps this resilient to a genuinely short response too.
+        """
+        assert self._serial is not None
+        data = bytearray()
+        deadline = time.monotonic() + timeout
+        while len(data) < size:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            self._serial.timeout = remaining
+            chunk = self._serial.read(size - len(data))
+            if chunk:
+                data.extend(chunk)
+        return bytes(data)
 
 
 class DavisVantageClient:
     """Davis Vantage Client class"""
 
-    _vantagepro2: VantagePro2 | None = None
+    _protocol_client: DavisProtocolClient | None = None
     _latitude: float = 0.0
     _longitude: float = 0.0
     _elevation: int = 0
@@ -258,13 +207,13 @@ class DavisVantageClient:
         self._last_close_result: str | None = None
 
     def _should_close_after_transaction(self) -> bool:
-        """WeatherLink TCP must periodically release port 22222 for cloud uploads."""
-        return not self._persistent_connection or self._protocol == PROTOCOL_NETWORK
+        """Serial-only: release the port unless a persistent connection was requested."""
+        return not self._persistent_connection
 
     def _close_transport_sync(self) -> None:
         """Close without constructing a lazy transport."""
-        if self._vantagepro2 is not None:
-            self._vantagepro2.link.close()
+        if self._protocol_client is not None:
+            self._protocol_client.link.close()
 
     def _execute_owned(self, func, args: tuple[Any, ...]) -> Any:
         """Execute one operation on the dedicated worker."""
@@ -272,7 +221,7 @@ class DavisVantageClient:
             self._connection_state = CONNECTION_RECONNECTING
             with contextlib.suppress(OSError, TimeoutError):
                 self._close_transport_sync()
-            self._vantagepro2 = None
+            self._protocol_client = None
             self._needs_reconnect = False
             self._reconnect_count += 1
         try:
@@ -285,7 +234,7 @@ class DavisVantageClient:
             self._needs_reconnect = True
             with contextlib.suppress(OSError, TimeoutError):
                 self._close_transport_sync()
-            self._vantagepro2 = None
+            self._protocol_client = None
             raise
         self._connection_state = CONNECTION_CONNECTED
         self._last_success = datetime.now().isoformat()
@@ -335,29 +284,25 @@ class DavisVantageClient:
 
     @property
     def link(self):
-        """Bridge to the underlying PyVantagePro link object."""
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        """Bridge to the underlying protocol client's link object."""
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
 
-        return self._vantagepro2.link
+        return self._protocol_client.link
 
-    def get_vantagepro2fromurl(self, url: str) -> VantagePro2:
-        if self._protocol == PROTOCOL_NETWORK:
-            network_link = link_from_url(url)
-            network_link.settimeout(10)
-            vp = DavisProtocolClient(network_link)
-        else:
-            serial_link = DavisSerialXLink(self._link, self._baud_rate)
-            serial_link.settimeout(10)
-            vp = DavisProtocolClient(serial_link)
+    def get_protocol_client_from_url(self, url: str) -> DavisProtocolClient:
+        del url  # serial-only: the link is built from configured endpoint/baud directly
+        serial_link = DavisSerialXLink(self._link, self._baud_rate)
+        serial_link.settimeout(10)
+        client = DavisProtocolClient(serial_link)
         if self._should_close_after_transaction():
-            vp.link.close()
-        return vp
+            client.link.close()
+        return client
 
     async def async_get_vantagepro2fromurl(self, url: str):
         _LOGGER.debug("async_get_vantagepro2fromurl with url=%s", url)
         try:
-            return await self._async_run_io(self.get_vantagepro2fromurl, url)
+            return await self._async_run_io(self.get_protocol_client_from_url, url)
         except Exception as err:
             _LOGGER.error("Error on opening device from url: %s: %s", url, err)
             return None
@@ -367,12 +312,12 @@ class DavisVantageClient:
         self._connection_state = CONNECTION_CONNECTING
 
         def _connect() -> None:
-            if self._vantagepro2 is None:
-                self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
-            self._vantagepro2.link.open()
-            self._vantagepro2.wake_up()
+            if self._protocol_client is None:
+                self._protocol_client = self.get_protocol_client_from_url(self.get_link())
+            self._protocol_client.link.open()
+            self._protocol_client.wake_up()
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
 
         await self._async_run_io(_connect)
 
@@ -399,28 +344,28 @@ class DavisVantageClient:
 
         start_readout = datetime.now()
 
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
 
         try:
-            self._vantagepro2.link.open()
+            self._protocol_client.link.open()
 
             if self._use_loop2:
                 _LOGGER.debug("Start get_current_data (LOOP 2 requested)")
-                data = self._get_loop2_data()
+                data = self._protocol_client.get_current_data_loop2()
             else:
                 _LOGGER.debug("Start get_current_data (LOOP 1)")
-                data = self._vantagepro2.get_current_data()
+                data = self._protocol_client.get_current_data()
 
             _LOGGER.debug("End get_current_data:")
         except Exception as e:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
             raise e
 
         try:
             _LOGGER.debug("Start get_hilows")
-            hilows = self._vantagepro2.get_hilows()
+            hilows = self._protocol_client.get_hilows()
             _LOGGER.debug("End get_hilows")
         except Exception as e:
             _LOGGER.error("Couldn't get hilows: %s", e)
@@ -430,10 +375,10 @@ class DavisVantageClient:
             try:
                 end_datetime = datetime.now()
                 start_datetime = end_datetime - timedelta(
-                    minutes=self._vantagepro2.archive_period * 2
+                    minutes=self._protocol_client.archive_period * 2
                 )
                 _LOGGER.debug("Start get_archives")
-                archives = self._vantagepro2.get_archives(start_datetime, end_datetime)
+                archives = self._protocol_client.get_archives(start_datetime, end_datetime)
                 _LOGGER.debug("End get_archives")
             except Exception as e:
                 _LOGGER.debug("Skipping archive sync (non-fatal serial/encoding hiccup): %s", e)
@@ -448,27 +393,11 @@ class DavisVantageClient:
             except Exception as e:
                 _LOGGER.error("Couldn't get rain_collector: %s", e)
         if self._should_close_after_transaction():
-            self._vantagepro2.link.close()
+            self._protocol_client.link.close()
 
         self._last_readout_duration = (datetime.now() - start_readout).total_seconds()
 
         return data, archives, hilows
-
-    def _get_loop2_data(self) -> LoopData2Parser:
-        """Request and parse a single LOOP2 packet.
-
-        PyVantagePro has no LOOP2 support, so this sends "LPS 2 1" directly
-        (mirroring VantagePro2.get_current_data()'s own wake_up/send/read
-        pattern) and parses the response with LoopData2Parser.
-        """
-        assert self._vantagepro2 is not None  # only called from get_current_data(), after it connects
-        self._vantagepro2.wake_up()
-        self._vantagepro2.send("LPS 2 1", self._vantagepro2.ACK)
-        raw_data = self._vantagepro2.link.read(99, binary=True)
-        if not isinstance(raw_data, bytes):
-            raw_data = raw_data.encode("latin-1")
-        validate_loop_frame(raw_data, 1)
-        return LoopData2Parser(raw_data)
 
     async def async_get_current_data(self):
         """Get current date from weather station async."""
@@ -546,25 +475,27 @@ class DavisVantageClient:
     ) -> str:
         """Send one command and enforce its documented response prefix."""
         def send_cmd():
-            if not self._vantagepro2:
-                self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+            if not self._protocol_client:
+                self._protocol_client = self.get_protocol_client_from_url(self.get_link())
             try:
-                self._vantagepro2.link.open()
-                self._vantagepro2.wake_up()
-                self._vantagepro2.link.write(command.encode("ascii"))
-                response = self._vantagepro2.link.read(
+                self._protocol_client.link.open()
+                self._protocol_client.wake_up()
+                self._protocol_client.link.write(command.encode("ascii"))
+                response = self._protocol_client.link.read(
                     response_size, binary=True
                 )
                 if isinstance(response, str):
                     response = response.encode("latin-1")
                 if response.startswith(b"\x21"):
-                    raise BadAckException()
+                    raise DavisBadAckError("Console rejected the command (NAK)")
                 if not response.startswith(expected):
-                    raise BadAckException()
+                    raise DavisBadAckError(
+                        f"Expected response starting with {expected!r}, got {response!r}"
+                    )
                 return response.decode("ascii", errors="ignore")
             finally:
                 if self._should_close_after_transaction():
-                    self._vantagepro2.link.close()
+                    self._protocol_client.link.close()
 
         return await self._async_run_io(send_cmd)
 
@@ -597,17 +528,129 @@ class DavisVantageClient:
         cmd = f"BAR={bar_value} {elevation_ft}\n"
         return await self._async_send_console_command(cmd, b"\n\rOK\n\r")
 
-    def get_eeprom(self, address_hex: str, size: int) -> bytes:
-        """Read `size` bytes from EEPROM starting at `address_hex` (manual sec. XIII)."""
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
-        self._vantagepro2.link.open()
+    async def async_get_test(self) -> bool:
+        """Connection sanity check (TEST)."""
+        return await self._async_run_io(self.get_test)
+
+    def get_test(self) -> bool:
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
         try:
-            self._vantagepro2.wake_up()
-            return self._vantagepro2.read_from_eeprom(address_hex, size)
+            self._protocol_client.link.open()
+            return self._protocol_client.test()
         finally:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
+
+    async def async_get_station_type(self) -> int:
+        """Return the WRD station-type byte (16=VP/Pro2, 17=Vue)."""
+        return await self._async_run_io(self.get_station_type)
+
+    def get_station_type(self) -> int:
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
+        try:
+            self._protocol_client.link.open()
+            return self._protocol_client.get_station_type()
+        finally:
+            if self._should_close_after_transaction():
+                self._protocol_client.link.close()
+
+    async def async_rxtest(self) -> None:
+        """Return the console to the main screen and clear the RXCHECK CRC-error count."""
+        await self._async_run_io(self.rxtest)
+
+    def rxtest(self) -> None:
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
+        try:
+            self._protocol_client.link.open()
+            self._protocol_client.rxtest()
+        finally:
+            if self._should_close_after_transaction():
+                self._protocol_client.link.close()
+
+    async def async_get_receivers(self) -> int:
+        """Return the RECEIVERS bitmap of station IDs the console can hear."""
+        return await self._async_run_io(self.get_receivers)
+
+    def get_receivers(self) -> int:
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
+        try:
+            self._protocol_client.link.open()
+            return self._protocol_client.get_receivers()
+        finally:
+            if self._should_close_after_transaction():
+                self._protocol_client.link.close()
+
+    async def async_get_calibrated_values(self) -> str:
+        """Read the 43-byte CALED block of calibrated sensor values, as hex."""
+        data = await self._async_run_io(self.get_calibrated_values)
+        return data.hex()
+
+    def get_calibrated_values(self) -> bytes:
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
+        try:
+            self._protocol_client.link.open()
+            return self._protocol_client.get_calibrated_values()
+        finally:
+            if self._should_close_after_transaction():
+                self._protocol_client.link.close()
+
+    async def async_set_calibrated_values(self, data_hex: str) -> None:
+        """Push a 43-byte block of uncalibrated raw sensor values (CALFIX)."""
+        data = bytes.fromhex(data_hex)
+        await self._async_run_io(self.set_calibrated_values, data)
+
+    def set_calibrated_values(self, data: bytes) -> None:
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
+        try:
+            self._protocol_client.link.open()
+            self._protocol_client.set_calibrated_values(data)
+        finally:
+            if self._should_close_after_transaction():
+                self._protocol_client.link.close()
+
+    async def async_set_yearly_et(self, et_hundredths: int) -> None:
+        """Set yearly ET in 100ths of an inch (PUTET)."""
+        try:
+            await self._async_run_io(self.set_yearly_et, et_hundredths)
+        except Exception as e:
+            _LOGGER.error("Couldn't set yearly ET: %s", e)
+
+    def set_yearly_et(self, et_hundredths: int) -> None:
+        """Set yearly ET so it reads back as et_hundredths, not the console's raw PUTET value.
+
+        Confirmed against real hardware on 2026-09-04 (see docs/decisions.md): the console
+        subtracts the current day's not-yet-finalized ET from whatever PUTET is given
+        before storing it, undocumented in the manual. Sending a PUTET value 14/100" low
+        when the day's ET was 0.142" was reproduced twice; compensating by the day's current
+        ET here makes the stored yearly total match what the caller actually asked for.
+        """
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
+        try:
+            self._protocol_client.link.open()
+            day_et_hundredths = round(self._protocol_client.get_current_data()["ETDay"] * 100)
+            self._protocol_client.set_yearly_et(et_hundredths + day_et_hundredths)
+        finally:
+            if self._should_close_after_transaction():
+                self._protocol_client.link.close()
+
+    def get_eeprom(self, address_hex: str, size: int) -> bytes:
+        """Read `size` bytes from EEPROM starting at `address_hex` (manual sec. XIII)."""
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
+        self._protocol_client.link.open()
+        try:
+            self._protocol_client.wake_up()
+            return self._protocol_client.read_from_eeprom(address_hex, size)
+        finally:
+            if self._should_close_after_transaction():
+                self._protocol_client.link.close()
 
     async def async_get_eeprom(self, address_hex: str, size: int) -> str:
         """Read EEPROM bytes and return them as a hex string."""
@@ -619,15 +662,15 @@ class DavisVantageClient:
 
         The console has no write protection; validate_eeprom_write is the only guard.
         """
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
-        self._vantagepro2.link.open()
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
+        self._protocol_client.link.open()
         try:
-            self._vantagepro2.wake_up()
-            self._vantagepro2.write_to_eeprom(address_hex, len(data), data)
+            self._protocol_client.wake_up()
+            self._protocol_client.write_to_eeprom(address_hex, len(data), data)
         finally:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
 
     async def async_set_eeprom(self, address_hex: str, data_hex: str) -> None:
         """Write a hex string of bytes to EEPROM starting at `address_hex`."""
@@ -635,7 +678,7 @@ class DavisVantageClient:
         await self._async_run_io(self.set_eeprom, address_hex, data)
 
     def add_additional_info(self, data: dict[str, Any]) -> None:
-        assert self._vantagepro2 is not None  # only called from async_get_current_data(), after get_current_data() connects
+        assert self._protocol_client is not None  # only called from async_get_current_data(), after get_current_data() connects
         # LOOP2 supplies DewPoint, HeatIndex and WindChill; only compute them when None (LOOP1).
         if data.get("TempOut") is not None:
             if data.get("HumOut") is not None:
@@ -691,7 +734,7 @@ class DavisVantageClient:
         if data.get("RainRate") is not None:
             data["IsRaining"] = data["RainRate"] > 0
 
-        data["ArchiveInterval"] = self._vantagepro2.archive_period
+        data["ArchiveInterval"] = self._protocol_client.archive_period
         data["Latitude"] = self.latitude
         data["Longitude"] = self.longitude
         data["Elevation"] = self.elevation
@@ -711,13 +754,24 @@ class DavisVantageClient:
         self.correct_rain_values(data)
 
     def correct_rain_values(self, data: dict[str, Any]):
-        rain_collector_factor: dict[str, float] = {
-            RAIN_COLLECTOR_IMPERIAL: 1.0,
-            RAIN_COLLECTOR_METRIC: 2 / 2.54,
-            RAIN_COLLECTOR_METRIC_0_1: 1 / 2.54,
+        """Convert raw rain-click counts to inches, by configured collector type.
+
+        Parsers in protocol.py store rain fields (rate/day/month/year/storm/
+        15-min/hour/24-hr) as raw click counts, not pre-scaled inches. This is
+        the single point where a click count becomes inches, replacing the
+        previous two-layer scale (parser assumed a 0.01" collector, then this
+        method applied a second correction factor on top of that).
+        """
+        rain_collector_inches_per_click: dict[str, float] = {
+            RAIN_COLLECTOR_IMPERIAL: 0.01,
+            RAIN_COLLECTOR_METRIC: 0.2 / 25.4,
+            RAIN_COLLECTOR_METRIC_0_1: 0.1 / 25.4,
         }
-        factor = rain_collector_factor.get(data["RainCollector"], 1.0)
-        for key in ["RainDay", "RainMonth", "RainYear", "RainRate", "RainStorm", "RainRateDay"]:
+        factor = rain_collector_inches_per_click.get(data["RainCollector"], 0.01)
+        for key in [
+            "RainDay", "RainMonth", "RainYear", "RainRate", "RainStorm",
+            "RainRateDay", "RainLast15Min", "RainLastHour", "RainLast24Hr",
+        ]:
             if key in data and data[key] is not None:
                 data[key] *= factor
 
@@ -804,9 +858,30 @@ class DavisVantageClient:
         data["WindGustDay"] = hilows["WindHiDay"]
         data["WindGustTime"] = self.strtotime(hilows["WindHiTime"])
 
+        # Extra temp (7) / soil temp (4) / leaf temp (4): day high/low only.
+        # Month/year hi/lo values are decoded onto the hilows dict itself and
+        # available via get_raw_data()/diagnostics for advanced use; see
+        # docs/backlog.md for the scoping note on why sensors are day-only.
+        for sensor in range(2, 9):
+            index = f"{sensor:02d}"
+            data[f"ExtraTemp{index}Hi"] = hilows.get(f"ExtraTemp{index}DayHi")
+            data[f"ExtraTemp{index}Low"] = hilows.get(f"ExtraTemp{index}DayLow")
+        for sensor in range(1, 5):
+            index = f"{sensor:02d}"
+            data[f"SoilTemp{index}Hi"] = hilows.get(f"SoilTemp{index}DayHi")
+            data[f"SoilTemp{index}Low"] = hilows.get(f"SoilTemp{index}DayLow")
+            data[f"LeafTemp{index}Hi"] = hilows.get(f"LeafTemp{index}DayHi")
+            data[f"LeafTemp{index}Low"] = hilows.get(f"LeafTemp{index}DayLow")
+            data[f"SoilMoist{index}Hi"] = hilows.get(f"SoilMoist{index}DayHi")
+            data[f"SoilMoist{index}Low"] = hilows.get(f"SoilMoist{index}DayLow")
+            data[f"LeafWet{index}Hi"] = hilows.get(f"LeafWet{index}DayHi")
+            data[f"LeafWet{index}Low"] = hilows.get(f"LeafWet{index}DayLow")
+        for sensor in range(2, 9):
+            index = f"{sensor:02d}"
+            data[f"ExtraHum{index}Hi"] = hilows.get(f"ExtraHum{index}DayHi")
+            data[f"ExtraHum{index}Low"] = hilows.get(f"ExtraHum{index}DayLow")
+
     def get_link(self) -> str:
-        if self._protocol == PROTOCOL_NETWORK:
-            return f"tcp:{self._link}"
         return f"serial:{self._link}:{self._baud_rate}:8N1"
 
     def get_raw_data(self):
@@ -815,7 +890,7 @@ class DavisVantageClient:
     def get_raw_hilows(self):
         return self._last_raw_hilows
 
-    def strtotime(self, time_str: str | None) -> time | None:
+    def strtotime(self, time_str: str | None) -> dt_time | None:
         if time_str is None:
             return None
         else:
@@ -828,9 +903,9 @@ class DavisVantageClient:
             return datetime.strptime(date_str, "%Y-%m-%d").date()
 
     def clear_cached_property(self, property_name: str) -> None:
-        """Invalidate a functools.cached_property on the underlying VantagePro2."""
-        if self._vantagepro2 is not None:
-            self._vantagepro2.__dict__.pop(property_name, None)
+        """Invalidate a functools.cached_property on the underlying protocol client."""
+        if self._protocol_client is not None:
+            self._protocol_client.__dict__.pop(property_name, None)
 
     def get_rain_collector(self) -> str:
         rain_collector_map = {
@@ -838,16 +913,16 @@ class DavisVantageClient:
             0x10: RAIN_COLLECTOR_METRIC,
             0x20: RAIN_COLLECTOR_METRIC_0_1,
         }
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
         try:
-            self._vantagepro2.link.open()
-            self._vantagepro2.wake_up()
-            rain_collector = self._vantagepro2.get_rain_collector()
+            self._protocol_client.link.open()
+            self._protocol_client.wake_up()
+            rain_collector = self._protocol_client.get_rain_collector()
             return rain_collector_map.get(rain_collector, "")
         finally:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
 
     async def async_get_rain_collector(self) -> str:
         info = ""
@@ -863,36 +938,36 @@ class DavisVantageClient:
             RAIN_COLLECTOR_METRIC: 0x10,
             RAIN_COLLECTOR_METRIC_0_1: 0x20,
         }
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
         try:
-            self._vantagepro2.link.open()
-            self._vantagepro2.set_rain_collector(
+            self._protocol_client.link.open()
+            self._protocol_client.set_rain_collector(
                 rain_collector_map.get(rain_collector, 0x00)
             )
             # Drop the cached collector type so the next poll re-reads it.
             self._rain_collector = ""
         finally:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
 
     async def async_set_rain_collector(self, rain_collector: str):
         await self._async_run_io(self.set_rain_collector, rain_collector)
 
     def get_latitude_longitude_elevation(self) -> tuple[float, float, int]:
         latitude = longitude = None
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
         try:
-            self._vantagepro2.link.open()
-            data = self._vantagepro2.read_from_eeprom("0B", 6)
+            self._protocol_client.link.open()
+            data = self._protocol_client.read_from_eeprom("0B", 6)
             latitude, longitude, elevation = struct.unpack(b"hhh", data)
             latitude /= 10
             longitude /= 10
             return latitude, longitude, elevation
         finally:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
 
     async def async_get_latitude_longitude_elevation(self):
         latitude = longitude = elevation = None
@@ -906,16 +981,16 @@ class DavisVantageClient:
 
     def get_davis_time(self) -> datetime | None:
         data = None
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
         try:
-            self._vantagepro2.link.open()
-            data = self._vantagepro2.gettime()
+            self._protocol_client.link.open()
+            data = self._protocol_client.gettime()
         except Exception as e:
             raise e
         finally:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
         return data
 
     async def async_get_davis_time(self) -> datetime | None:
@@ -927,16 +1002,16 @@ class DavisVantageClient:
         return data
 
     def set_davis_time(self, dtime: datetime) -> None:
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
         try:
-            self._vantagepro2.link.open()
-            self._vantagepro2.settime(dtime)
+            self._protocol_client.link.open()
+            self._protocol_client.settime(dtime)
         except Exception as e:
             raise e
         finally:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
 
     async def async_set_davis_time(self) -> None:
         try:
@@ -945,18 +1020,18 @@ class DavisVantageClient:
             _LOGGER.error("Couldn't set davis time: %s", e)
 
     def get_info(self) -> dict[str, Any] | None:
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
         try:
-            self._vantagepro2.link.open()
-            firmware_version = self._vantagepro2.firmware_version
-            firmware_date = self._vantagepro2.firmware_date
-            diagnostics = self._vantagepro2.diagnostics
+            self._protocol_client.link.open()
+            firmware_version = self._protocol_client.firmware_version
+            firmware_date = self._protocol_client.firmware_date
+            diagnostics = self._protocol_client.diagnostics
         except Exception as e:
             raise e
         finally:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
         return {
             "version": firmware_version,
             "date": firmware_date,
@@ -972,17 +1047,17 @@ class DavisVantageClient:
         return info
 
     def get_static_info(self) -> dict[str, Any] | None:
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
         try:
-            self._vantagepro2.link.open()
-            firmware_version = self._vantagepro2.firmware_version
-            archive_period = self._vantagepro2.archive_period
+            self._protocol_client.link.open()
+            firmware_version = self._protocol_client.firmware_version
+            archive_period = self._protocol_client.archive_period
         except Exception as e:
             raise e
         finally:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
         return {"version": firmware_version, "archive_period": archive_period}
 
     async def async_get_static_info(self) -> dict[str, Any] | None:
@@ -994,16 +1069,16 @@ class DavisVantageClient:
         return info
 
     def set_yearly_rain(self, rain_clicks: int) -> None:
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
         try:
-            self._vantagepro2.link.open()
-            self._vantagepro2.set_yearly_rain(rain_clicks)
+            self._protocol_client.link.open()
+            self._protocol_client.set_yearly_rain(rain_clicks)
         except Exception as e:
             raise e
         finally:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
 
     async def async_set_yearly_rain(self, rain_clicks: int) -> None:
         try:
@@ -1012,16 +1087,16 @@ class DavisVantageClient:
             _LOGGER.error("Couldn't set yearly rain: %s", e)
 
     def set_archive_period(self, archive_period: int) -> None:
-        if not self._vantagepro2:
-            self._vantagepro2 = self.get_vantagepro2fromurl(self.get_link())
+        if not self._protocol_client:
+            self._protocol_client = self.get_protocol_client_from_url(self.get_link())
         try:
-            self._vantagepro2.link.open()
-            self._vantagepro2.set_archive_period(archive_period)
+            self._protocol_client.link.open()
+            self._protocol_client.set_archive_period(archive_period)
         except Exception as e:
             raise e
         finally:
             if self._should_close_after_transaction():
-                self._vantagepro2.link.close()
+                self._protocol_client.link.close()
 
     async def async_set_archive_period(self, archive_period: int) -> None:
         await self._async_run_io(self.set_archive_period, archive_period)
@@ -1074,7 +1149,7 @@ class DavisVantageClient:
             self._connection_state = CONNECTION_DEGRADED
             return False
 
-        self._vantagepro2 = None
+        self._protocol_client = None
         self._executor.shutdown(wait=False, cancel_futures=False)
         self._executor_shutdown = True
         self._connection_state = CONNECTION_CLOSED
