@@ -11,12 +11,7 @@ from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import AbortFlow
-from homeassistant.helpers.selector import (
-    SelectSelector,
-    SelectSelectorConfig,
-    SerialPortSelector,
-    TextSelector,
-)
+from homeassistant.helpers.selector import SerialPortSelector
 
 from .const import (
     CONF_USE_LOOP2,
@@ -33,7 +28,6 @@ from .const import (
     DEFAULT_SYNC_INTERVAL,
     DOMAIN,
     IDENTITY_STRONG,
-    PROTOCOL_NETWORK,
     PROTOCOL_SERIAL,
 )
 from .verification import (
@@ -45,13 +39,9 @@ from .verification import (
 
 _LOGGER = logging.getLogger(__name__)
 
-CONNECTION_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONFIG_PROTOCOL): SelectSelector(
-            SelectSelectorConfig(options=[PROTOCOL_SERIAL, PROTOCOL_NETWORK])
-        )
-    }
-)
+# Serial/USB is the only supported transport; the interface form asks for a
+# serial port directly instead of an intermediate connection-method choice.
+INTERFACE_SCHEMA = vol.Schema({vol.Required(CONFIG_LINK): SerialPortSelector()})
 
 
 def _options_schema(
@@ -76,64 +66,54 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 2
 
-    protocol: str
+    protocol: str = PROTOCOL_SERIAL
     link: str
     verification: VerificationResult | None = None
     _is_reconfigure = False
-    _reconfigure_started = False
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Choose Serial/USB or WeatherLink network transport."""
+        """Select the Davis serial/USB interface directly."""
         if user_input is not None:
-            self.protocol = user_input[CONFIG_PROTOCOL]
-            return await self.async_step_interface()
-        return self.async_show_form(step_id="user", data_schema=CONNECTION_SCHEMA)
+            self.link = user_input[CONFIG_LINK]
+            self.verification = None
+            return await self.async_step_verify()
+        return self.async_show_form(step_id="user", data_schema=INTERFACE_SCHEMA)
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Start a transport-aware reconfigure flow."""
+        """Start a serial-only reconfigure flow."""
         self._is_reconfigure = True
         entry = self._get_reconfigure_entry()
-        if self._reconfigure_started and user_input is not None:
-            self.protocol = user_input[CONFIG_PROTOCOL]
-            return await self.async_step_interface()
-        self._reconfigure_started = True
+        if user_input is not None:
+            self.link = user_input[CONFIG_LINK]
+            self.verification = None
+            return await self.async_step_verify()
+        suggested_link = str(entry.data.get(CONFIG_LINK, ""))
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=self.add_suggested_values_to_schema(
-                CONNECTION_SCHEMA,
-                {CONFIG_PROTOCOL: entry.data.get(CONFIG_PROTOCOL, PROTOCOL_SERIAL)},
+                INTERFACE_SCHEMA, {CONFIG_LINK: suggested_link}
             ),
         )
 
     async def async_step_interface(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Select one interface without opening it while the form is displayed."""
+        """Re-prompt for an interface after a failed verification attempt."""
         errors: dict[str, str] = {}
         if user_input is not None:
             self.link = user_input[CONFIG_LINK]
             self.verification = None
             return await self.async_step_verify()
 
-        suggested_link = ""
-        if self._is_reconfigure:
-            suggested_link = str(
-                self._get_reconfigure_entry().data.get(CONFIG_LINK, "")
-            )
-        field = (
-            SerialPortSelector()
-            if self.protocol == PROTOCOL_SERIAL
-            else TextSelector()
-        )
-        schema = vol.Schema({vol.Required(CONFIG_LINK): field})
+        suggested_link = self.link if hasattr(self, "link") else ""
         return self.async_show_form(
             step_id="interface",
             data_schema=self.add_suggested_values_to_schema(
-                schema, {CONFIG_LINK: suggested_link}
+                INTERFACE_SCHEMA, {CONFIG_LINK: suggested_link}
             ),
             errors=errors,
         )
@@ -151,13 +131,7 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_show_form(
                     step_id="interface",
                     data_schema=vol.Schema(
-                        {
-                            vol.Required(CONFIG_LINK, default=self.link): (
-                                SerialPortSelector()
-                                if self.protocol == PROTOCOL_SERIAL
-                                else TextSelector()
-                            )
-                        }
+                        {vol.Required(CONFIG_LINK, default=self.link): SerialPortSelector()}
                     ),
                     errors={"base": "no_davis_device"},
                 )
@@ -165,13 +139,7 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_show_form(
                     step_id="interface",
                     data_schema=vol.Schema(
-                        {
-                            vol.Required(CONFIG_LINK, default=self.link): (
-                                SerialPortSelector()
-                                if self.protocol == PROTOCOL_SERIAL
-                                else TextSelector()
-                            )
-                        }
+                        {vol.Required(CONFIG_LINK, default=self.link): SerialPortSelector()}
                     ),
                     errors={"base": "cannot_connect"},
                 )
@@ -180,13 +148,7 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_show_form(
                     step_id="interface",
                     data_schema=vol.Schema(
-                        {
-                            vol.Required(CONFIG_LINK, default=self.link): (
-                                SerialPortSelector()
-                                if self.protocol == PROTOCOL_SERIAL
-                                else TextSelector()
-                            )
-                        }
+                        {vol.Required(CONFIG_LINK, default=self.link): SerialPortSelector()}
                     ),
                     errors={"base": "unknown"},
                 )

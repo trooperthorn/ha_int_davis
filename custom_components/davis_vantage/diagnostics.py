@@ -49,6 +49,14 @@ async def async_get_config_entry_diagnostics(
     rxcheck = await _try_console_command(client.async_get_rxcheck)
     nver = await _try_console_command(client.async_get_nver)
     bardata = await _try_console_command(client.async_get_bardata)
+    try:
+        station_type = str(await client.async_get_station_type())
+    except Exception as err:
+        station_type = f"unavailable: {err}"
+    try:
+        receivers = f"{await client.async_get_receivers():#010b}"
+    except Exception as err:
+        receivers = f"unavailable: {err}"
 
     raw_data = dict(client.get_raw_data())
     raw_data.pop("_raw_bytes", None)
@@ -76,6 +84,8 @@ async def async_get_config_entry_diagnostics(
             "rxcheck": rxcheck,
             "nver": nver,
             "bardata": bardata,
+            "station_type": station_type,
+            "receivers": receivers,
         },
         "last_data": async_redact_data(dict(coordinator.data or {}), TO_REDACT),
         "raw_loop_data": raw_data,

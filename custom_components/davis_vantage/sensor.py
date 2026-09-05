@@ -468,6 +468,105 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
 )
 
 
+def _extra_sensor_key(data_key: str) -> Callable[[dict], float | int | None]:
+    """Build a value_fn reading one HILOWS-decoded extra/soil/leaf key."""
+    return lambda data: data.get(data_key)
+
+
+def _build_hilows_extra_sensors() -> tuple[DavisSensorEntityDescription, ...]:
+    """Disabled-by-default sensors for the HILOWS extra/soil/leaf decode.
+
+    Day high/low only; the full Month/Year Hi/Lo decode is available in the
+    coordinator's raw hilows data (see docs/backlog.md for the scoping note).
+    """
+    entries: list[DavisSensorEntityDescription] = []
+
+    for sensor in range(2, 9):
+        idx = f"{sensor:02d}"
+        for bound, label in (("Hi", "High"), ("Low", "Low")):
+            entries.append(
+                DavisSensorEntityDescription(
+                    key=f"extra_temperature_{sensor}_{bound.lower()}",
+                    translation_key=f"extra_temperature_{bound.lower()}",
+                    name=f"Extra Temperature {sensor} {label} (Day)",
+                    icon="mdi:thermometer",
+                    device_class=SensorDeviceClass.TEMPERATURE,
+                    native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+                    state_class=SensorStateClass.MEASUREMENT,
+                    entity_registry_enabled_default=False,
+                    value_fn=_extra_sensor_key(f"ExtraTemp{idx}{bound}"),
+                )
+            )
+            entries.append(
+                DavisSensorEntityDescription(
+                    key=f"extra_humidity_{sensor}_{bound.lower()}",
+                    translation_key=f"extra_humidity_{bound.lower()}",
+                    name=f"Extra Humidity {sensor} {label} (Day)",
+                    icon="mdi:water-percent",
+                    device_class=SensorDeviceClass.HUMIDITY,
+                    native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
+                    state_class=SensorStateClass.MEASUREMENT,
+                    entity_registry_enabled_default=False,
+                    value_fn=_extra_sensor_key(f"ExtraHum{idx}{bound}"),
+                )
+            )
+
+    for sensor in range(1, 5):
+        idx = f"{sensor:02d}"
+        for bound, label in (("Hi", "High"), ("Low", "Low")):
+            entries.append(
+                DavisSensorEntityDescription(
+                    key=f"soil_temperature_{sensor}_{bound.lower()}",
+                    translation_key=f"soil_temperature_{bound.lower()}",
+                    name=f"Soil Temperature {sensor} {label} (Day)",
+                    icon="mdi:thermometer",
+                    device_class=SensorDeviceClass.TEMPERATURE,
+                    native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+                    state_class=SensorStateClass.MEASUREMENT,
+                    entity_registry_enabled_default=False,
+                    value_fn=_extra_sensor_key(f"SoilTemp{idx}{bound}"),
+                )
+            )
+            entries.append(
+                DavisSensorEntityDescription(
+                    key=f"leaf_temperature_{sensor}_{bound.lower()}",
+                    translation_key=f"leaf_temperature_{bound.lower()}",
+                    name=f"Leaf Temperature {sensor} {label} (Day)",
+                    icon="mdi:thermometer",
+                    device_class=SensorDeviceClass.TEMPERATURE,
+                    native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+                    state_class=SensorStateClass.MEASUREMENT,
+                    entity_registry_enabled_default=False,
+                    value_fn=_extra_sensor_key(f"LeafTemp{idx}{bound}"),
+                )
+            )
+            entries.append(
+                DavisSensorEntityDescription(
+                    key=f"soil_moisture_{sensor}_{bound.lower()}",
+                    translation_key=f"soil_moisture_{bound.lower()}",
+                    name=f"Soil Moisture {sensor} {label} (Day)",
+                    icon="mdi:water-percent",
+                    entity_registry_enabled_default=False,
+                    value_fn=_extra_sensor_key(f"SoilMoist{idx}{bound}"),
+                )
+            )
+            entries.append(
+                DavisSensorEntityDescription(
+                    key=f"leaf_wetness_{sensor}_{bound.lower()}",
+                    translation_key=f"leaf_wetness_{bound.lower()}",
+                    name=f"Leaf Wetness {sensor} {label} (Day)",
+                    icon="mdi:leaf",
+                    entity_registry_enabled_default=False,
+                    value_fn=_extra_sensor_key(f"LeafWet{idx}{bound}"),
+                )
+            )
+
+    return tuple(entries)
+
+
+SENSOR_TYPES = SENSOR_TYPES + _build_hilows_extra_sensors()
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -572,11 +671,11 @@ class DavisVantageSensor(CoordinatorEntity, SensorEntity):
                 if self.entity_description.key in ("outside_temperature", "TempOut"):
                     try:
                         _LOGGER.warning(
-                            "PyVantagePro Keys: %s", list(self.coordinator.data.keys())
+                            "Davis coordinator data keys: %s", list(self.coordinator.data.keys())
                         )
                     except Exception:
                         _LOGGER.warning(
-                            "PyVantagePro Properties: %s", dir(self.coordinator.data)
+                            "Davis coordinator data properties: %s", dir(self.coordinator.data)
                         )
                 self._attr_missing_value_logged = True
         else:

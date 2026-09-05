@@ -109,3 +109,34 @@ set_console_lamps:
 clear_alarms:
   fields:
     entry_id: *entry_id
+run_test:
+  fields:
+    entry_id: *entry_id
+get_station_type:
+  fields:
+    entry_id: *entry_id
+rxtest:
+  fields:
+    entry_id: *entry_id
+get_receivers:
+  fields:
+    entry_id: *entry_id
+get_calibrated_values:
+  fields:
+    entry_id: *entry_id
+set_calibrated_values:
+  fields:
+    entry_id: *entry_id
+    data:
+      required: true
+      example: "0000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      selector:
+        text:
+set_yearly_et:
+  fields:
+    entry_id: *entry_id
+    et_hundredths:
+      required: true
+      example: 2483
+      selector:
+        number:
