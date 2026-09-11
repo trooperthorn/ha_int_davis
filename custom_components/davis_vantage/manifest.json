@@ -12,7 +12,7 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/trooperthorn/ha_int_davis/issues",
   "requirements": [
-    "serialx==1.9.0"
+    "serialx>=1.9.0,<2"
   ],
-  "version": "2026.09.04.3"
+  "version": "2026.09.06.1"
 }

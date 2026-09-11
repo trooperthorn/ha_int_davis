@@ -357,3 +357,17 @@ form through `normalize_unique_id`.
 
 RXCHECK, NVER, and BARDATA were wired up in the client but never exposed; they now appear
 in the diagnostics download.
+
+## 2026-09-06: `serialx` is declared as a range, not an exact pin
+
+Home Assistant installs a custom integration's requirements with core's own
+`package_constraints.txt` as a pip constraint. Core 2026.9.0 constrained `serialx==1.9.0`
+and core 2026.9.1 moved to `serialx==1.10.0`; with the manifest pinned to `1.9.0` exactly
+the install became unsatisfiable and the integration failed setup on every host that
+took the point release. The manifest now declares `serialx>=1.9.0,<2` so core's
+constraint chooses the version. hassfest only requires exact pins for core integrations.
+This integration imports `serialx` directly, never the `serial` compatibility name that
+serialx 1.10.0 split into `serialx-compat`, so the range is safe. The test pin stays
+exact and tracks core's current constraint.
+
+Rejected: an exact pin of `1.10.0`, which breaks again on the next core point release.
