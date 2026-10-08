@@ -3,7 +3,7 @@
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import voluptuous as vol
+import probatio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 
@@ -40,26 +40,26 @@ def _bytes_to_hex(data: bytes) -> str:
     """Format bytes as space-separated uppercase hex (e.g. b"\\x01\\x02" -> "01 02")."""
     return " ".join(f"{byte:02X}" for byte in data)
 
-SET_YEARLY_RAIN_SERVICE_SCHEMA = vol.Schema(
+SET_YEARLY_RAIN_SERVICE_SCHEMA = probatio.Schema(
     {
-        vol.Optional("entry_id"): str,
-        vol.Required("rain_clicks"): int
+        probatio.Optional("entry_id"): str,
+        probatio.Required("rain_clicks"): int
     }
 )
 
-SET_ARCHIVE_PERIOD_SERVICE_SCHEMA = vol.Schema(
+SET_ARCHIVE_PERIOD_SERVICE_SCHEMA = probatio.Schema(
     {
-        vol.Optional("entry_id"): str,
-        vol.Required("archive_period"): vol.In(
+        probatio.Optional("entry_id"): str,
+        probatio.Required("archive_period"): probatio.In(
             ["1", "5", "10", "15", "30", "60", "120"]
         )
     }
 )
 
-SET_RAIN_COLLECTOR_SERVICE_SCHEMA = vol.Schema(
+SET_RAIN_COLLECTOR_SERVICE_SCHEMA = probatio.Schema(
     {
-        vol.Optional("entry_id"): str,
-        vol.Required("rain_collector"): vol.In(
+        probatio.Optional("entry_id"): str,
+        probatio.Required("rain_collector"): probatio.In(
             [
                 RAIN_COLLECTOR_IMPERIAL,
                 RAIN_COLLECTOR_METRIC,
@@ -69,53 +69,53 @@ SET_RAIN_COLLECTOR_SERVICE_SCHEMA = vol.Schema(
     }
 )
 
-SET_BAROMETER_CALIBRATION_SERVICE_SCHEMA = vol.Schema(
+SET_BAROMETER_CALIBRATION_SERVICE_SCHEMA = probatio.Schema(
     {
-        vol.Optional("entry_id"): str,
-        vol.Required("elevation"): vol.All(int, vol.Range(min=-2000, max=15000)),
-        vol.Optional("barometer", default=0.0): vol.All(
-            vol.Coerce(float), vol.Any(0, vol.Range(min=20.0, max=32.5))
+        probatio.Optional("entry_id"): str,
+        probatio.Required("elevation"): probatio.All(int, probatio.Range(min=-2000, max=15000)),
+        probatio.Optional("barometer", default=0.0): probatio.All(
+            probatio.Coerce(float), probatio.Any(0, probatio.Range(min=20.0, max=32.5))
         ),
     }
 )
 
-HEX_ADDRESS = vol.Match(r"^[0-9A-Fa-f]{1,3}$")
-HEX_BYTES = vol.Match(r"^([0-9A-Fa-f]{2})+$")
+HEX_ADDRESS = probatio.Match(r"^[0-9A-Fa-f]{1,3}$")
+HEX_BYTES = probatio.Match(r"^([0-9A-Fa-f]{2})+$")
 
-SET_CONSOLE_LAMPS_SERVICE_SCHEMA = vol.Schema(
+SET_CONSOLE_LAMPS_SERVICE_SCHEMA = probatio.Schema(
     {
-        vol.Optional("entry_id"): str,
-        vol.Required("state"): bool,
+        probatio.Optional("entry_id"): str,
+        probatio.Required("state"): bool,
     }
 )
 
-GET_EEPROM_SERVICE_SCHEMA = vol.Schema(
+GET_EEPROM_SERVICE_SCHEMA = probatio.Schema(
     {
-        vol.Optional("entry_id"): str,
-        vol.Required("address"): HEX_ADDRESS,
-        vol.Required("size"): vol.All(int, vol.Range(min=1, max=256)),
+        probatio.Optional("entry_id"): str,
+        probatio.Required("address"): HEX_ADDRESS,
+        probatio.Required("size"): probatio.All(int, probatio.Range(min=1, max=256)),
     }
 )
 
-SET_EEPROM_SERVICE_SCHEMA = vol.Schema(
+SET_EEPROM_SERVICE_SCHEMA = probatio.Schema(
     {
-        vol.Optional("entry_id"): str,
-        vol.Required("address"): HEX_ADDRESS,
-        vol.Required("data"): HEX_BYTES,
+        probatio.Optional("entry_id"): str,
+        probatio.Required("address"): HEX_ADDRESS,
+        probatio.Required("data"): HEX_BYTES,
     }
 )
 
-SET_CALIBRATED_VALUES_SERVICE_SCHEMA = vol.Schema(
+SET_CALIBRATED_VALUES_SERVICE_SCHEMA = probatio.Schema(
     {
-        vol.Optional("entry_id"): str,
-        vol.Required("data"): vol.Match(r"^([0-9A-Fa-f]{2}){43}$"),
+        probatio.Optional("entry_id"): str,
+        probatio.Required("data"): probatio.Match(r"^([0-9A-Fa-f]{2}){43}$"),
     }
 )
 
-SET_YEARLY_ET_SERVICE_SCHEMA = vol.Schema(
+SET_YEARLY_ET_SERVICE_SCHEMA = probatio.Schema(
     {
-        vol.Optional("entry_id"): str,
-        vol.Required("et_hundredths"): int,
+        probatio.Optional("entry_id"): str,
+        probatio.Required("et_hundredths"): int,
     }
 )
 

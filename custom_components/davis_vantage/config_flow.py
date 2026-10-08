@@ -6,7 +6,7 @@ import logging
 from typing import Any
 from uuid import uuid4
 
-import voluptuous as vol
+import probatio
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.core import callback
@@ -41,20 +41,20 @@ _LOGGER = logging.getLogger(__name__)
 
 # Serial/USB is the only supported transport; the interface form asks for a
 # serial port directly instead of an intermediate connection-method choice.
-INTERFACE_SCHEMA = vol.Schema({vol.Required(CONFIG_LINK): SerialPortSelector()})
+INTERFACE_SCHEMA = probatio.Schema({probatio.Required(CONFIG_LINK): SerialPortSelector()})
 
 
 def _options_schema(
     *, interval: int, use_loop2: bool, persistent_connection: bool
-) -> vol.Schema:
+) -> probatio.Schema:
     """Build the single owner for runtime-tuning settings."""
-    return vol.Schema(
+    return probatio.Schema(
         {
-            vol.Required(CONFIG_INTERVAL, default=interval): vol.All(
-                int, vol.Range(min=CONFIG_MINIMAL_INTERVAL, max=1800)
+            probatio.Required(CONFIG_INTERVAL, default=interval): probatio.All(
+                int, probatio.Range(min=CONFIG_MINIMAL_INTERVAL, max=1800)
             ),
-            vol.Optional(CONF_USE_LOOP2, default=use_loop2): bool,
-            vol.Optional(
+            probatio.Optional(CONF_USE_LOOP2, default=use_loop2): bool,
+            probatio.Optional(
                 CONFIG_PERSISTENT_CONNECTION, default=persistent_connection
             ): bool,
         }
@@ -130,16 +130,16 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
             except DavisNotFoundError:
                 return self.async_show_form(
                     step_id="interface",
-                    data_schema=vol.Schema(
-                        {vol.Required(CONFIG_LINK, default=self.link): SerialPortSelector()}
+                    data_schema=probatio.Schema(
+                        {probatio.Required(CONFIG_LINK, default=self.link): SerialPortSelector()}
                     ),
                     errors={"base": "no_davis_device"},
                 )
             except DavisCannotConnectError:
                 return self.async_show_form(
                     step_id="interface",
-                    data_schema=vol.Schema(
-                        {vol.Required(CONFIG_LINK, default=self.link): SerialPortSelector()}
+                    data_schema=probatio.Schema(
+                        {probatio.Required(CONFIG_LINK, default=self.link): SerialPortSelector()}
                     ),
                     errors={"base": "cannot_connect"},
                 )
@@ -147,8 +147,8 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected exception verifying Davis interface")
                 return self.async_show_form(
                     step_id="interface",
-                    data_schema=vol.Schema(
-                        {vol.Required(CONFIG_LINK, default=self.link): SerialPortSelector()}
+                    data_schema=probatio.Schema(
+                        {probatio.Required(CONFIG_LINK, default=self.link): SerialPortSelector()}
                     ),
                     errors={"base": "unknown"},
                 )
@@ -160,7 +160,7 @@ class DavisVantageConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="verify",
-            data_schema=vol.Schema({}),
+            data_schema=probatio.Schema({}),
             description_placeholders={
                 "endpoint": self.verification.endpoint,
                 "baud": (

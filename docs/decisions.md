@@ -3,6 +3,16 @@
 Dated decisions with the alternative rejected and why. Entries marked "recorded" were
 carried out of code comments on 2026-09-04; the decision itself is older.
 
+## 2026-10-08: Minimum Home Assistant is 2026.10.0, schemas use probatio
+
+Core 2026.10 types flow, service and websocket schemas as probatio, so the voluptuous
+schemas failed mypy (developer blog 2026-09-30, "Probatio is our validation engine").
+The integration now imports `probatio` directly, as core does; runtime behavior is
+unchanged because core has validated with probatio since 2026.9. The suite runs on core
+2026.10.0 and `hacs.json` follows the tested core. The `serialx` test pin moves to
+1.11.0 to match core 2026.10.0's constraint. Rejected: aliasing `probatio as vol`, which
+core's lint config bans.
+
 ## 2026-09-04: the manifest is the version source, not tag history
 
 `Release` publishes the version already in `manifest.json` and refuses drift; `Prepare
