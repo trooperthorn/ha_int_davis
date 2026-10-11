@@ -381,3 +381,28 @@ serialx 1.10.0 split into `serialx-compat`, so the range is safe. The test pin s
 exact and tracks core's current constraint.
 
 Rejected: an exact pin of `1.10.0`, which breaks again on the next core point release.
+
+## 2026-10-10: wind direction statistics use a circular mean
+
+`wind_direction` and `wind_gust_direction` now declare
+`device_class: wind_direction` and `state_class: measurement_angle` instead of
+`state_class: measurement`. With `measurement`, the recorder builds long-term
+statistics with an arithmetic mean, min, and max; for an angle that is wrong
+whenever the wind crosses north, because an hour split between 350 and 10 degrees
+averages to 180 (due south). `measurement_angle` makes the recorder use a circular
+mean (`StatisticMeanType.CIRCULAR` in core's `sensor/recorder.py`) and keep only the
+mean, and core only allows `measurement_angle` for the `wind_direction` device class
+in degrees. Anything that reads these statistics, such as a `statistics-graph` card or
+a windrose card with `use_statistics`, gets a correct direction after this change.
+The live state and the raw history are unchanged.
+
+Consequence on an existing installation: the old statistics were written with the
+arithmetic mean type, and core refuses to mix the two. After updating, the recorder
+logs that the mean algorithm changed, stops generating long-term statistics for these
+two sensors, and raises a "mean type has changed" repair. Fixing that repair (Settings
+-> Repairs, or Developer tools -> Statistics) deletes the old, incorrect statistics,
+and generation resumes from that point. Nothing is migrated, because the old means
+cannot be converted to circular means after the fact.
+
+Rejected: leaving `measurement`, which keeps statistics that are wrong near north, and
+removing the state class, which drops long-term statistics entirely.

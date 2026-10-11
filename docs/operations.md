@@ -27,6 +27,15 @@ console offers no protection (see `protocol.md`).
 Diagnostics dumps redact station latitude and longitude and every EEPROM key, because
 users attach those dumps to public issues.
 
+## Wind direction statistics repair after updating
+
+`Wind Direction` and `Wind Gust Direction` record long-term statistics with a circular
+mean (see `decisions.md`, 2026-10-10). On an installation that already has statistics
+for them, the first restart after the update raises a "mean type has changed" repair
+and pauses their long-term statistics. Fix it from Settings -> Repairs (or Developer
+tools -> Statistics); that deletes the old arithmetic statistics, which are wrong near
+north anyway, and statistics resume. Live states and raw history are not affected.
+
 ## Blueprints
 
 - `close_windows_when_raining.yaml`: the condition entity list (living room window,
