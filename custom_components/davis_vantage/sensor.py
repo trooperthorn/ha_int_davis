@@ -14,6 +14,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    DEGREE,
     EntityCategory,
     UnitOfElectricPotential,
     UnitOfIrradiance,
@@ -263,8 +264,9 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         translation_key="wind_direction",
         name="Wind Direction",
         icon="mdi:compass-outline",
-        native_unit_of_measurement="°",
-        state_class=SensorStateClass.MEASUREMENT,
+        device_class=SensorDeviceClass.WIND_DIRECTION,
+        native_unit_of_measurement=DEGREE,
+        state_class=SensorStateClass.MEASUREMENT_ANGLE,
         value_fn=_wind_dir_or_none,
     ),
     DavisSensorEntityDescription(
@@ -280,8 +282,9 @@ SENSOR_TYPES: tuple[DavisSensorEntityDescription, ...] = (
         translation_key="wind_gust_direction",
         name="Wind Gust Direction",
         icon="mdi:compass-outline",
-        native_unit_of_measurement="°",
-        state_class=SensorStateClass.MEASUREMENT,
+        device_class=SensorDeviceClass.WIND_DIRECTION,
+        native_unit_of_measurement=DEGREE,
+        state_class=SensorStateClass.MEASUREMENT_ANGLE,
         entity_registry_enabled_default=False,
         value_fn=lambda data: data.get('WindGustDir'),
     ),
