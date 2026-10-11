@@ -130,3 +130,28 @@ class TestOptionalSensorEnabledDefault:
     def test_non_optional_sensor_always_enabled(self):
         sensor = make_sensor(None, key="TempOut")
         assert sensor.entity_registry_enabled_default is True
+
+
+class TestWindDirectionStatistics:
+    """Wind direction is an angle, so long-term statistics must use a circular mean.
+
+    With plain MEASUREMENT the recorder averages arithmetically, and an hour that
+    swings between 350 and 10 degrees records a mean of 180 (due south). The
+    expected device class, state class, and unit are checked against core's own
+    tables so a combination core rejects fails here rather than at runtime.
+    """
+
+    @pytest.mark.parametrize("key", ["wind_direction", "wind_gust_direction"])
+    def test_direction_sensors_use_measurement_angle(self, key):
+        from homeassistant.components.sensor import (
+            DEVICE_CLASS_STATE_CLASSES,
+            DEVICE_CLASS_UNITS,
+            SensorDeviceClass,
+            SensorStateClass,
+        )
+
+        description = next(d for d in SENSOR_TYPES if d.key == key)
+        assert description.device_class is SensorDeviceClass.WIND_DIRECTION
+        assert description.state_class is SensorStateClass.MEASUREMENT_ANGLE
+        assert description.state_class in DEVICE_CLASS_STATE_CLASSES[description.device_class]
+        assert description.native_unit_of_measurement in DEVICE_CLASS_UNITS[description.device_class]
