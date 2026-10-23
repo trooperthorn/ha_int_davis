@@ -1,5 +1,5 @@
 pytest-homeassistant-custom-component==0.13.372
 mypy==2.4.0
-ruff==0.16.10
+ruff==0.17.0
 serialx==1.14.0
 aiousbwatcher==1.1.2
