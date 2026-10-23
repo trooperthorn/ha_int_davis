@@ -1,4 +1,4 @@
-pytest-homeassistant-custom-component==0.13.372
+pytest-homeassistant-custom-component==0.13.373
 mypy==2.4.0
 ruff==0.16.10
 serialx==1.11.0
